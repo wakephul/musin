@@ -1,0 +1,127 @@
+services:
+  db:
+    image: mysql:8.4
+    env_file:
+      - .env
+    volumes:
+      - musin_db_data:/var/lib/mysql
+    ports:
+      - "3307:3306"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-p${MYSQL_ROOT_PASSWORD}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio
+    env_file:
+      - .env
+    command: server /data --console-address ":9001"
+    ports:
+      - "9050:9000"
+      - "9051:9001"
+    volumes:
+      - musin_minio_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.engine
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env
+    environment:
+      # [FIX] Mappatura speculare automatica delle credenziali MinIO
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./backend:/app/backend
+      - ./worker:/app/worker
+    ports:
+      - "8010:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: infrastructure/Dockerfile.engine
+    command: celery -A worker.celery_app worker --loglevel=info --pool=solo --max-memory-per-child=18000000
+    deploy:
+      resources:
+        limits:
+          cpus: "6.0"
+          memory: 20G
+        reservations:
+          cpus: "6.0"
+          memory: 6G
+    env_file:
+      - .env
+    environment:
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - LD_LIBRARY_PATH=/opt/nest/lib/nest:${LD_LIBRARY_PATH:-}
+      - NEST_MODULE_PATH=/opt/nest/lib/nest
+    volumes:
+      - ./backend:/app/backend
+      - ./worker:/app/worker
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    volumes:
+      - ./infrastructure/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  musin_db_data:
+  musin_minio_data:

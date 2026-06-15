@@ -1,0 +1,68 @@
+# --- STAGE 1: Builder ---
+FROM python:3.12-slim-bookworm AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 1. Dipendenze di sistema e toolchain di compilazione nativa Debian
+RUN apt-get update -o Acquire::Retries=5 && apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
+    build-essential git libltdl-dev libreadline-dev libncurses-dev libgsl-dev \
+    python3-dev libboost-all-dev openmpi-bin libopenmpi-dev wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Python Tools
+RUN pip install --upgrade pip && pip install --no-cache-dir "cython<3" numpy cmake
+
+# 3. Compilazione NEST Simulator 3.8 da sorgente
+WORKDIR /src
+RUN git clone --branch v3.8 https://github.com/nest/nest-simulator.git
+WORKDIR /src/nest-simulator/build
+RUN cmake -DCMAKE_INSTALL_PREFIX:PATH=/opt/nest -Dwith-python=ON -Dwith-mpi=ON .. && \
+    make -j$(nproc) && make install
+
+# 4. Compilazione CerebNEST (Branch nest_3_8 Ufficiale)
+WORKDIR /src
+RUN git clone --branch nest_3_8 https://github.com/alberto-antonietti/CerebNEST.git
+WORKDIR /src/CerebNEST/build
+RUN cmake -Dwith-nest=/opt/nest/bin/nest-config -DCMAKE_INSTALL_PREFIX=/opt/nest .. && \
+    make -j$(nproc) && make install
+
+# --- STAGE 2: Runtime ---
+FROM python:3.12-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LC_ALL=C.UTF-8
+ENV LANG=C.UTF-8
+
+# Installiamo solo le librerie necessarie a runtime
+RUN apt-get update -o Acquire::Retries=5 && apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
+    libgsl-dev libltdl7 libreadline8 openmpi-bin libopenmpi-dev libboost-serialization-dev \
+    curl file && rm -rf /var/lib/apt/lists/*
+
+# Copiamo l'installazione pulita di NEST dal builder stage
+COPY --from=builder /opt/nest /opt/nest
+
+# Linker: Assicuriamoci che i moduli compilati siano al posto giusto
+RUN mkdir -p /opt/nest/lib/nest && \
+    find /opt/nest -name "cerebmodule.so" -exec cp {} /opt/nest/lib/nest/ \; || true && \
+    find /opt/nest -name "cerebellar_module.so" -exec cp {} /opt/nest/lib/nest/ \; || true
+
+# Configurazione ldconfig per le librerie condivise
+RUN echo "/opt/nest/lib" > /etc/ld.so.conf.d/nest.conf && \
+    echo "/opt/nest/lib/nest" >> /etc/ld.so.conf.d/nest.conf && \
+    ldconfig
+
+# Variabili d'ambiente nevralgiche
+ENV NEST_INSTALL_DIR=/opt/nest
+ENV PATH=$NEST_INSTALL_DIR/bin:$PATH
+ENV PYTHONPATH=$NEST_INSTALL_DIR/lib/python3.12/site-packages:$PYTHONPATH
+ENV LD_LIBRARY_PATH=/opt/nest/lib:/opt/nest/lib/nest:$LD_LIBRARY_PATH
+
+WORKDIR /app
+
+# 5. Installazione dipendenze API e Worker tramite file requirements
+# [FIX] Copiamo il requirements.txt partendo dalla cartella backend/
+COPY backend/requirements.txt .
+RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+# Aggiungiamo /app al PYTHONPATH
+ENV PYTHONPATH=/app:$PYTHONPATH

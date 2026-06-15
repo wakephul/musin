@@ -1,0 +1,186 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+}
+
+html,
+body {
+  font-family: var(--font-sans);
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+.font-mono,
+code,
+pre {
+  font-family: var(--font-mono);
+}
+
+/* ============================================================
+   MuSiN design system — cinematic shell + clinical surfaces
+   ============================================================ */
+
+@layer components {
+  /* Frosted glass panel (dark shell contexts) */
+  .glass-dark {
+    @apply bg-slate-900/70 backdrop-blur-xl border border-white/10;
+  }
+
+  /* Frosted glass panel (light contexts) */
+  .glass-light {
+    @apply bg-white/80 backdrop-blur-xl border border-white/60;
+  }
+
+  /* Section card used across content pages */
+  .surface-card {
+    @apply bg-white rounded-2xl border border-slate-200/80 shadow-[0_1px_3px_rgba(15,23,42,0.04),0_12px_32px_-12px_rgba(15,23,42,0.12)];
+  }
+
+  /* Primary gradient CTA */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 font-semibold text-white
+           bg-gradient-to-br from-blue-600 to-indigo-600
+           hover:from-blue-500 hover:to-indigo-500
+           shadow-lg shadow-blue-600/20 transition-all
+           disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 font-semibold
+           text-slate-600 bg-white border border-slate-200
+           hover:border-slate-300 hover:bg-slate-50 transition-all;
+  }
+}
+
+/* ============================================================
+   Cinematic backdrop — animated aurora mesh (login / hero)
+   ============================================================ */
+
+.aurora {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: radial-gradient(120% 120% at 50% 0%, #0b1220 0%, #060912 60%, #030509 100%);
+}
+
+.aurora::before,
+.aurora::after {
+  content: '';
+  position: absolute;
+  width: 60vw;
+  height: 60vw;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.55;
+  will-change: transform;
+}
+
+.aurora::before {
+  top: -20%;
+  left: -10%;
+  background: radial-gradient(circle, #2563eb 0%, transparent 65%);
+  animation: aurora-drift-a 18s ease-in-out infinite alternate;
+}
+
+.aurora::after {
+  bottom: -25%;
+  right: -10%;
+  background: radial-gradient(circle, #7c3aed 0%, transparent 65%);
+  animation: aurora-drift-b 22s ease-in-out infinite alternate;
+}
+
+@keyframes aurora-drift-a {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(12vw, 8vh, 0) scale(1.18); }
+}
+
+@keyframes aurora-drift-b {
+  0%   { transform: translate3d(0, 0, 0) scale(1.1); }
+  100% { transform: translate3d(-10vw, -6vh, 0) scale(1); }
+}
+
+/* Subtle grid overlay for depth */
+.grid-overlay {
+  background-image:
+    linear-gradient(to right, rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+/* ============================================================
+   Entrance animations
+   ============================================================ */
+
+@keyframes fade-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.animate-fade-rise {
+  animation: fade-rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.5s ease both;
+}
+
+.delay-100 { animation-delay: 0.1s; }
+.delay-200 { animation-delay: 0.2s; }
+.delay-300 { animation-delay: 0.3s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora::before,
+  .aurora::after,
+  .animate-fade-rise,
+  .animate-fade-in {
+    animation: none !important;
+  }
+}
+
+/* ============================================================
+   Custom scrollbar (referenced across components)
+   ============================================================ */
+
+.custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.55);
+}
+
+/* ============================================================
+   Icon-button tooltip (used in dashboard/network/simulation actions)
+   ============================================================ */
+.tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: #1e293b;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 30;
+}
+.group:hover > .tooltip { opacity: 1; }

@@ -1,0 +1,93 @@
+import enum
+from datetime import datetime
+from typing import Optional, List, Any
+from sqlalchemy import String, ForeignKey, JSON, Enum, DateTime, func, Text, Float
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+class Base(DeclarativeBase):
+    pass
+
+class SimulationStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    ABORTED = "ABORTED"
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    networks: Mapped[List["Network"]] = relationship("Network", back_populates="owner", cascade="all, delete-orphan")
+    stimuli: Mapped[List["Stimulus"]] = relationship("Stimulus", back_populates="owner", cascade="all, delete-orphan")
+    simulations: Mapped[List["Simulation"]] = relationship("Simulation", back_populates="owner", cascade="all, delete-orphan")
+
+class Network(Base):
+    __tablename__ = "networks"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    definition: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    
+    # Forking logic
+    parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"), nullable=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    owner: Mapped["User"] = relationship("User", back_populates="networks")
+    parent: Mapped[Optional["Network"]] = relationship("Network", remote_side=[id], backref="forks")
+    simulations: Mapped[List["Simulation"]] = relationship("Simulation", back_populates="network")
+
+class Stimulus(Base):
+    __tablename__ = "stimuli"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    file_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True) 
+    definition: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True) 
+    
+    # Forking logic
+    parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("stimuli.id", ondelete="SET NULL"), nullable=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    owner: Mapped["User"] = relationship("User", back_populates="stimuli")
+    parent: Mapped[Optional["Stimulus"]] = relationship("Stimulus", remote_side=[id], backref="forks")
+    simulations: Mapped[List["Simulation"]] = relationship("Simulation", back_populates="stimulus")
+
+class Simulation(Base):
+    __tablename__ = "simulations"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    
+    network_id: Mapped[int] = mapped_column(ForeignKey("networks.id", ondelete="RESTRICT"), nullable=False)
+    stimulus_id: Mapped[Optional[int]] = mapped_column(ForeignKey("stimuli.id", ondelete="SET NULL"), nullable=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    
+    # --- NUOVI CAMPI PER I METADATI DEL TRIAL ---
+    duration_ms: Mapped[float] = mapped_column(Float, default=1000.0, nullable=False)
+    experiment_params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # --------------------------------------------
+
+    status: Mapped[SimulationStatus] = mapped_column(Enum(SimulationStatus), default=SimulationStatus.PENDING, nullable=False)
+    celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True, nullable=True)
+    results_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True) 
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    owner: Mapped["User"] = relationship("User", back_populates="simulations")
+    network: Mapped["Network"] = relationship("Network", back_populates="simulations")
+    stimulus: Mapped[Optional["Stimulus"]] = relationship("Stimulus", back_populates="simulations")

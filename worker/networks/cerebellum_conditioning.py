@@ -1,0 +1,705 @@
+"""
+Cerebellar associative conditioning experiment — NEST 2.18 → 3.8 port.
+
+Training phase  (plasticity ON):  n_train trials, each with auditory OR visual stimulus.
+Test phase      (plasticity OFF):  n_test trials × 3 conditions (auditory / visual / audiovisual).
+
+Trial structure: 1000 ms stimulus window + 2000 ms ITI = 3000 ms/trial.
+IO teaching signal: 8.5 Hz Poisson, 300–600 ms into each training trial.
+
+Config source: data/config/network_config.json + cerebellum_simple.py (musin-backend-1.0.0)
+
+Plasticity note: NEST 3.8 has no volume_transmitter_alberto; cerebellar LTD is implemented
+manually after each training trial by reading GR + IO spike recorders and updating
+GR→PC static-synapse weights according to CF-gated anti-Hebbian depression.
+"""
+
+import io
+import gc
+import json
+import random
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
+# ── Fixed protocol constants (from network_config.json) ─────────────────────
+TRIAL_MS        = 3000.0   # total trial window
+STIM_MS         = 1000.0   # stimulus duration within trial
+IO_START_MS     = 300.0    # IO teaching onset within trial
+IO_STOP_MS      = 600.0    # IO teaching offset within trial
+IO_RATE         = 8.5      # Hz, IO Poisson rate
+STIM_RATE       = 30.0     # Hz, sensory Poisson rate (execution_types.json)
+N_STIM_NEURONS  = 80       # parrot neurons per stimulus channel (execution_types.json)
+BIN_MS          = 5.0      # rate-bin size
+MA_WINDOW       = 10       # moving-average window (bins)
+RT_THRESHOLD    = 15.0     # Hz, |rate_A − rate_B| threshold for response-time detection
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+def _bin_rates(times, n_neurons, t_start, t_end, bin_ms=BIN_MS):
+    bins  = np.arange(t_start, t_end + bin_ms, bin_ms)
+    t_arr = np.asarray(times)
+    mask  = (t_arr >= t_start) & (t_arr < t_end)
+    counts, _ = np.histogram(t_arr[mask], bins=bins)
+    rates = counts * 1000.0 / (bin_ms * max(n_neurons, 1))
+    return bins[:-1], rates
+
+
+def _moving_average(arr, window=MA_WINDOW):
+    if len(arr) < window:
+        return np.array(arr, dtype=float)
+    return np.convolve(arr, np.ones(window) / window, mode='same')
+
+
+def _response_time(ma_a, ma_b, t_bins, trial_start_ms, threshold=RT_THRESHOLD):
+    """First bin where |rate_A − rate_B| ≥ threshold within the trial window."""
+    diff = np.abs(np.asarray(ma_a) - np.asarray(ma_b))
+    mask = (t_bins >= trial_start_ms) & (t_bins < trial_start_ms + TRIAL_MS)
+    local_diff = diff[mask]
+    local_bins = t_bins[mask]
+    hits = np.where(local_diff >= threshold)[0]
+    if len(hits):
+        return float(local_bins[hits[0]] - trial_start_ms)
+    return float('nan')
+
+
+# ── Network builder ──────────────────────────────────────────────────────────
+
+def _build_network(nest, par):
+    GR_num  = par['GR_num']           # 2000
+    PC_num  = par['PC_num']           # 100
+    DCN_num = PC_num // 2             # 50
+
+    # Granule cells — iaf_cond_exp (unchanged from legacy)
+    GR = nest.Create('iaf_cond_exp', GR_num, params={
+        't_ref': 1.0, 'C_m': 2.0, 'V_th': -40.0, 'V_reset': -70.0,
+        'g_L': 0.2, 'tau_syn_ex': 0.5, 'tau_syn_in': 10.0, 'E_L': -70.0,
+    })
+
+    # Purkinje cells — eglif_pc_nestml (CerebNEST 3.8)
+    PC = nest.Create('eglif_pc_nestml', PC_num)
+
+    # IO as parrot neurons (relays teaching signal, same as legacy)
+    IO = nest.Create('parrot_neuron', PC_num)
+
+    # DCN — eglif_dcnp (CerebNEST 3.8)
+    DCN = nest.Create('eglif_dcnp', DCN_num)
+
+    # Stimulus parrot neuron banks (4 channels)
+    PA_aud = nest.Create('parrot_neuron', N_STIM_NEURONS)
+    PA_vis = nest.Create('parrot_neuron', N_STIM_NEURONS)
+    PB_aud = nest.Create('parrot_neuron', N_STIM_NEURONS)
+    PB_vis = nest.Create('parrot_neuron', N_STIM_NEURONS)
+
+    # Spike recorders
+    sr_DCN_a = nest.Create('spike_recorder')
+    sr_DCN_b = nest.Create('spike_recorder')
+    sr_PC    = nest.Create('spike_recorder')
+    sr_IO    = nest.Create('spike_recorder')
+    sr_GR    = nest.Create('spike_recorder')   # used during training for LTD
+
+    DCN_a = DCN[:DCN_num // 2]
+    DCN_b = DCN[DCN_num // 2:]
+    nest.Connect(DCN_a, sr_DCN_a)
+    nest.Connect(DCN_b, sr_DCN_b)
+    nest.Connect(PC,    sr_PC)
+    nest.Connect(IO,    sr_IO)
+    nest.Connect(GR,    sr_GR)
+
+    # ── GR connections: each GR gets 4 pre-synaptic inputs (2 aud + 2 vis)
+    #    from one randomly chosen side (A or B).
+    #    Build flat integer arrays of node IDs for NEST 3.8 one_to_one.
+    rng = random.Random(int(par.get('seed', 1234)))
+    n   = N_STIM_NEURONS - 1
+
+    # Pre-extract all global IDs to avoid repeated NodeCollection indexing
+    pa_aud_ids = list(PA_aud.global_id)
+    pa_vis_ids = list(PA_vis.global_id)
+    pb_aud_ids = list(PB_aud.global_id)
+    pb_vis_ids = list(PB_vis.global_id)
+    gr_ids     = list(GR.global_id)
+
+    pre_ids  = []
+    post_ids = []
+
+    for gr_id in gr_ids:
+        side = rng.randint(0, 1)
+        aud_ids = pa_aud_ids if side == 0 else pb_aud_ids
+        vis_ids = pa_vis_ids if side == 0 else pb_vis_ids
+        pre_ids.extend([
+            aud_ids[rng.randint(0, n)],
+            aud_ids[rng.randint(0, n)],
+            vis_ids[rng.randint(0, n)],
+            vis_ids[rng.randint(0, n)],
+        ])
+        post_ids.extend([gr_id, gr_id, gr_id, gr_id])
+
+    rng_np = np.random.default_rng(int(par.get('seed', 1234)) + 1)
+    mf_weights = rng_np.uniform(0.55, 1.5, size=len(pre_ids)).astype(np.float64)
+    mf_delays  = np.ones(len(pre_ids), dtype=np.float64)
+
+    nest.Connect(np.array(pre_ids, dtype=np.uint64),
+                 np.array(post_ids, dtype=np.uint64),
+                 'one_to_one',
+                 {'synapse_model': 'static_synapse',
+                  'weight': mf_weights, 'delay': mf_delays})
+
+    # ── PF–PC static synapses (receptor 1)
+    # Plasticity is applied manually after each training trial via
+    # _apply_ltd_step(), which reads GR/IO spike recorders and updates weights.
+    # This replaces stdp_synapse_sinexp which lacks volume_transmitter in NEST 3.8.
+    for PCi in PC:
+        nest.Connect(GR, PCi,
+                     {'rule': 'fixed_indegree', 'indegree': int(0.8 * GR_num)},
+                     {'synapse_model': 'static_synapse',
+                      'weight': float(par['Init_PFPC']),   # 4.0
+                      'delay': 1.0,
+                      'receptor_type': 1})
+
+    # Cache the full PF-PC SynapseCollection for efficient weight updates
+    pfpc_conns = nest.GetConnections(GR, PC)
+
+    # ── IO → PC  (climbing fiber, receptor 5 = CF_SPIKES)
+    nest.Connect(IO, PC, 'one_to_one', {
+        'synapse_model': 'static_synapse',
+        'weight': 1.0, 'delay': 1.0, 'receptor_type': 5,
+    })
+
+    # ── All stimulus channels → DCN  (excitatory mossy-fiber collateral, receptor 1)
+    mfdcn_w = (par['Init_MFDCN_low'] + par['Init_MFDCN_high']) / 2.0   # 0.085
+    for ch in [PA_aud, PA_vis, PB_aud, PB_vis]:
+        nest.Connect(ch, DCN, 'all_to_all', {
+            'synapse_model': 'static_synapse',
+            'weight': mfdcn_w, 'delay': 20.0, 'receptor_type': 1,
+        })
+
+    # ── PC → DCN  (inhibitory, receptor 2): 2 PCs per DCN cell
+    # eglif_dcnp receptor 2 uses conductance-based inhibition with E_rev < E_rest.
+    # Weight must be POSITIVE (conductance amplitude); reversal potential provides
+    # the inhibitory sign.  Negative weight causes inverted (excitatory) effect.
+    count_dcn = 0
+    for p_idx in range(PC_num):
+        nest.Connect(PC[p_idx], DCN[count_dcn], 'all_to_all', {
+            'synapse_model': 'static_synapse',
+            'weight': abs(par['Init_PCDCN']),  # 20.0 (positive conductance)
+            'delay': 1.0, 'receptor_type': 2,
+        })
+        if p_idx % 2 == 1:
+            count_dcn += 1
+
+    io_ids   = list(IO.global_id)
+    io_half  = len(io_ids) // 2
+    pc_ids   = list(PC.global_id)
+    pc_half  = len(pc_ids) // 2
+
+    return dict(
+        GR=GR, PC=PC, IO=IO, DCN=DCN,
+        DCN_a=DCN_a, DCN_b=DCN_b,
+        PA_aud=PA_aud, PA_vis=PA_vis, PB_aud=PB_aud, PB_vis=PB_vis,
+        sr_DCN_a=sr_DCN_a, sr_DCN_b=sr_DCN_b, sr_PC=sr_PC, sr_IO=sr_IO, sr_GR=sr_GR,
+        pfpc_conns=pfpc_conns,
+        io_a_ids=set(io_ids[:io_half]),
+        io_b_ids=set(io_ids[io_half:]),
+        pc_a_ids=set(pc_ids[:pc_half]),
+        pc_b_ids=set(pc_ids[pc_half:]),
+        PC_num=PC_num, DCN_num=DCN_num,
+    )
+
+
+def _apply_ltd_step(nest, net, trial_t0, par):
+    """
+    CF-gated LTD: after each training trial, depress PF→PC weights for
+    co-active GR→PC pairs where the corresponding PC received a CF (IO) spike.
+
+    LTD rule: ΔW = -LTD_rate  for each (GR, PC) where GR fired in [t0, t0+STIM_MS]
+              AND PC is in CF-active set (IO fired in IO window for that side)
+    LTP rule: ΔW = +LTP_rate  for inactive GR→PC pairs (slow recovery toward Init_PFPC)
+    """
+    LTD_RATE = abs(par['LTD1']) * 0.25     # 1.5 per co-active trial → weights hit 0 in ~3 trials
+    LTP_RATE = par['LTP1']      * 0.005    # 0.00025 recovery per trial
+    W_MIN    = 0.0
+    W_MAX    = par['Init_PFPC'] * 1.5      # 6.0
+
+    # Which IO neurons fired in the IO window → which PC side received CF
+    io_evts = net['sr_IO'].get('events')
+    io_t    = np.asarray(io_evts['times'])
+    io_s    = np.asarray(io_evts['senders'], dtype=int)
+    io_win_mask = (io_t >= trial_t0 + IO_START_MS) & (io_t < trial_t0 + IO_STOP_MS)
+    fired_io = set(io_s[io_win_mask].tolist())
+
+    cf_a = bool(fired_io & net['io_a_ids'])   # CF arrived at side-A PCs
+    cf_b = bool(fired_io & net['io_b_ids'])   # CF arrived at side-B PCs
+
+    if not cf_a and not cf_b:
+        return   # no CF fired this trial — no plasticity
+
+    # GRs that fired during stimulus window
+    gr_evts = net['sr_GR'].get('events')
+    gr_t    = np.asarray(gr_evts['times'])
+    gr_s    = np.asarray(gr_evts['senders'], dtype=int)
+    stim_mask   = (gr_t >= trial_t0) & (gr_t < trial_t0 + STIM_MS)
+    active_grs  = set(gr_s[stim_mask].tolist())
+
+    if not active_grs:
+        return
+
+    # Read all PF-PC weights at once
+    pfpc = net['pfpc_conns']
+    sources = np.asarray(nest.GetStatus(pfpc, 'source'), dtype=int)
+    targets = np.asarray(nest.GetStatus(pfpc, 'target'), dtype=int)
+    weights = np.asarray(nest.GetStatus(pfpc, 'weight'), dtype=float)
+
+    pc_a_ids = net['pc_a_ids']
+    pc_b_ids = net['pc_b_ids']
+
+    new_weights = weights.copy()
+    for j in range(len(sources)):
+        src = sources[j]
+        tgt = targets[j]
+        w   = weights[j]
+        in_active = src in active_grs
+        # CF-gated LTD
+        if in_active and ((tgt in pc_a_ids and cf_a) or (tgt in pc_b_ids and cf_b)):
+            new_weights[j] = max(W_MIN, w - LTD_RATE)
+        else:
+            # Slow recovery toward Init_PFPC
+            new_weights[j] = min(W_MAX, w + LTP_RATE)
+
+    nest.SetStatus(pfpc, 'weight', new_weights.tolist())
+
+
+def _add_stim(nest, net, global_trial_idx, channel_keys):
+    """Create one poisson_generator per active channel for this trial."""
+    t0 = global_trial_idx * TRIAL_MS
+    for ch_key in channel_keys:
+        pg = nest.Create('poisson_generator', params={
+            'rate': STIM_RATE,
+            'start': float(t0),
+            'stop':  float(t0 + STIM_MS),
+        })
+        nest.Connect(pg, net[ch_key], 'all_to_all')
+
+
+def _add_io(nest, net, global_trial_idx, side_a):
+    """Create IO teaching-signal generator for one training trial."""
+    t0 = global_trial_idx * TRIAL_MS
+    pg = nest.Create('poisson_generator', params={
+        'rate':  IO_RATE,
+        'start': float(t0 + IO_START_MS),
+        'stop':  float(t0 + IO_STOP_MS),
+    })
+    IO_half = len(net['IO']) // 2
+    target = net['IO'][:IO_half] if side_a else net['IO'][IO_half:]
+    nest.Connect(pg, target, 'all_to_all')
+
+
+# ── Main entry point ─────────────────────────────────────────────────────────
+
+def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, progress_cb):
+    """
+    Full cerebellar conditioning: training + test.
+    Called from worker/tasks.py when builtin == 'cerebellum_conditioning'.
+    """
+    import nest
+
+    # Parameters from network_config.json defaults; overrideable via exp_params
+    par = {
+        'LTP1': 0.05, 'LTD1': -6.0, 'Init_PFPC': 4.0,
+        'Init_MFDCN_low': 0.06, 'Init_MFDCN_high': 0.11,
+        'Init_PCDCN': -20.0,
+        'GR_num': 2000, 'PC_num': 100,
+        'seed': 1234,
+    }
+    for k in list(par.keys()):
+        if k in exp_params:
+            par[k] = exp_params[k]
+
+    n_train = int(exp_params.get('n_train', 20))
+    n_test  = int(exp_params.get('n_test',  20))
+
+    owner_id  = sim_id_dict['owner_id']
+    sim_id    = sim_id_dict['sim_id']
+    base_path = f"results/{owner_id}/sim_{sim_id}"
+
+    # ── Randomized, balanced experimental design ──────────────────
+    # Training: balanced A/B sides + balanced auditory/visual modality, shuffled order.
+    # Test: 3 conditions × n_test, each balanced A/B, then ALL trials interleaved
+    #       (shuffled together) so conditions and sides are randomized — this avoids
+    #       order/statistical artefacts from running condition-blocks back to back.
+    rng_design = random.Random(int(par['seed']))
+
+    def _balanced_sides(n):
+        """Return n booleans (side_a) with balanced True/False, shuffled."""
+        sides = [True] * ((n + 1) // 2) + [False] * (n // 2)
+        rng_design.shuffle(sides)
+        return sides
+
+    # Training specs: list of (side_a, modality)
+    train_sides = _balanced_sides(n_train)
+    train_mods  = (['auditory', 'visual'] * ((n_train + 1) // 2))[:n_train]
+    rng_design.shuffle(train_mods)
+    train_specs = list(zip(train_sides, train_mods))
+
+    # Test specs: list of (condition, side_a), interleaved across conditions
+    test_specs = []
+    for cond in ('auditory', 'visual', 'audiovisual'):
+        for s in _balanced_sides(n_test):
+            test_specs.append((cond, s))
+    rng_design.shuffle(test_specs)
+
+    # Human-readable sequences for the metrics JSON
+    train_modality = [m for (_s, m) in train_specs]
+    train_side_seq = ['A' if s else 'B' for (s, _m) in train_specs]
+    test_sequence  = [{'condition': c, 'side': 'A' if s else 'B'} for (c, s) in test_specs]
+
+    # ── NEST kernel ──────────────────────────────────────────────
+    progress_cb(3, "Initializing NEST kernel")
+    nest.ResetKernel()
+    nest.SetKernelStatus({
+        'resolution': 1.0,
+        'rng_seed':   int(par['seed']),
+        'local_num_threads': 4,
+    })
+    for mod in ('cerebellar_module', 'cerebmodule'):
+        try:
+            nest.Install(mod)
+            break
+        except Exception:
+            pass
+
+    # ── Build network ────────────────────────────────────────────
+    progress_cb(8, "Building cerebellar microcircuit")
+    net = _build_network(nest, par)
+
+    train_time         = n_train * TRIAL_MS          # 60 000 ms
+    test_time_per_type = n_test  * TRIAL_MS          # 60 000 ms
+    total_time         = train_time + test_time_per_type * 3
+
+    # ── Training phase: trial-by-trial to allow weight updates ───
+    progress_cb(12, "Training phase: plasticity ON (CF-gated LTD)")
+    for t, (side_a, mod) in enumerate(train_specs):
+        if mod == 'auditory':
+            ch_keys = ['PA_aud'] if side_a else ['PB_aud']
+        else:
+            ch_keys = ['PA_vis'] if side_a else ['PB_vis']
+        _add_stim(nest, net, t, ch_keys)
+        _add_io(nest, net, t, side_a)
+
+        nest.Simulate(TRIAL_MS)
+
+        _apply_ltd_step(nest, net, t * TRIAL_MS, par)
+
+        pct = 12 + int(38 * (t + 1) / n_train)
+        progress_cb(pct, f"Training trial {t+1}/{n_train} ({'A' if side_a else 'B'} {mod})")
+        gc.collect()
+
+    # ── Test stimuli (plasticity frozen — no weight updates) ─────
+    # Conditions and sides are interleaved (see test_specs) to avoid block artefacts.
+    progress_cb(52, "Wiring test stimuli (plasticity OFF, randomized order)")
+    for k, (cond, side_a) in enumerate(test_specs):
+        g = n_train + k
+        if cond == 'auditory':
+            ch_keys = ['PA_aud'] if side_a else ['PB_aud']
+        elif cond == 'visual':
+            ch_keys = ['PA_vis'] if side_a else ['PB_vis']
+        else:  # audiovisual
+            ch_keys = ['PA_aud', 'PA_vis'] if side_a else ['PB_aud', 'PB_vis']
+        _add_stim(nest, net, g, ch_keys)
+
+    # ── Simulate test phase in chunks ────────────────────────────
+    progress_cb(54, "Simulating test phase (plasticity OFF)")
+    chunk    = 5000.0
+    simmed   = 0.0
+    test_total = test_time_per_type * 3
+    while simmed < test_total:
+        step = min(chunk, test_total - simmed)
+        nest.Simulate(step)
+        simmed += step
+        pct = 54 + int(32 * simmed / test_total)
+        progress_cb(pct, f"Test: {int(simmed/1000)}/{int(test_total/1000)} s")
+        gc.collect()
+
+    # ── Extract spikes ───────────────────────────────────────────
+    progress_cb(87, "Analysing spikes")
+
+    def _get(sr):
+        ev = sr.get('events')
+        return np.asarray(ev['senders'], dtype=int), np.asarray(ev['times'], dtype=float)
+
+    snd_a, t_a = _get(net['sr_DCN_a'])
+    snd_b, t_b = _get(net['sr_DCN_b'])
+    snd_pc, t_pc = _get(net['sr_PC'])
+    snd_gr, t_gr = _get(net['sr_GR'])
+    snd_io, t_io = _get(net['sr_IO'])
+
+    DCN_a_n = len(net['DCN_a'])
+    DCN_b_n = len(net['DCN_b'])
+    PC_n    = net['PC_num']
+
+    t_bins_a, rates_a = _bin_rates(t_a, DCN_a_n, 0, total_time)
+    t_bins_b, rates_b = _bin_rates(t_b, DCN_b_n, 0, total_time)
+    ma_a = _moving_average(rates_a)
+    ma_b = _moving_average(rates_b)
+
+    t_bins_pc, rates_pc = _bin_rates(t_pc, PC_n, 0, total_time)
+    ma_pc = _moving_average(rates_pc)
+
+    # Baseline from last ITI of training
+    baseline_win = 1000.0
+    baseline_t0  = train_time - baseline_win
+    base_a_hz = len(t_a[(t_a >= baseline_t0) & (t_a < train_time)]) / baseline_win * 1000.0 / max(DCN_a_n, 1)
+    base_b_hz = len(t_b[(t_b >= baseline_t0) & (t_b < train_time)]) / baseline_win * 1000.0 / max(DCN_b_n, 1)
+
+    cond_labels   = ('auditory', 'visual', 'audiovisual')
+    rt_by_cond    = {lbl: [] for lbl in cond_labels}
+    trial_results = []
+
+    for k, (cond, side_a) in enumerate(test_specs):
+        g       = n_train + k
+        t0      = g * TRIAL_MS
+        t1_stim = t0 + STIM_MS
+
+        rt = _response_time(ma_a, ma_b, t_bins_a, t0)
+        rt_by_cond[cond].append(rt)
+
+        spk_a = int(np.sum((t_a >= t0) & (t_a < t1_stim)))
+        spk_b = int(np.sum((t_b >= t0) & (t_b < t1_stim)))
+        expected_baseline_a = base_a_hz * STIM_MS / 1000.0 * DCN_a_n
+        expected_baseline_b = base_b_hz * STIM_MS / 1000.0 * DCN_b_n
+        delta_a  = spk_a - expected_baseline_a
+        delta_b  = spk_b - expected_baseline_b
+        winner   = 'DCN_A' if delta_a > delta_b else 'DCN_B'
+        expected = 'DCN_A' if side_a else 'DCN_B'
+
+        trial_results.append({
+            'trial': g, 'condition': cond,
+            'side': 'A' if side_a else 'B',
+            'expected': expected, 'winner': winner,
+            'correct': winner == expected,
+            'response_time_ms': None if np.isnan(rt) else rt,
+            'spikes_DCN_A': spk_a, 'spikes_DCN_B': spk_b,
+            'delta_A': float(delta_a), 'delta_B': float(delta_b),
+        })
+
+    accuracy  = {}
+    median_rt = {}
+    for lbl in cond_labels:
+        cond_tr       = [r for r in trial_results if r['condition'] == lbl]
+        accuracy[lbl] = 100.0 * sum(1 for r in cond_tr if r['correct']) / max(len(cond_tr), 1)
+        valid_rts     = [r for r in rt_by_cond[lbl] if not np.isnan(r)]
+        median_rt[lbl] = float(np.median(valid_rts)) if valid_rts else None
+
+    # ── Diagnostics: baseline rates and weight stats ─────────────
+    print(f"[DIAG] base_a_hz={base_a_hz:.2f}  base_b_hz={base_b_hz:.2f}")
+    print(f"[DIAG] expected_baseline_a={base_a_hz*STIM_MS/1000.0*DCN_a_n:.1f}  b={base_b_hz*STIM_MS/1000.0*DCN_b_n:.1f}")
+    # First 3 test trials in detail
+    for r in trial_results[:6]:
+        print(f"[DIAG] {r['condition']} side={r['side']}: spk_a={r['spikes_DCN_A']} spk_b={r['spikes_DCN_B']}  dA={r['delta_A']:.0f} dB={r['delta_B']:.0f} winner={r['winner']}")
+
+    # ── Final PF–PC weight stats for diagnostics ─────────────────
+    final_weights = np.asarray(nest.GetStatus(net['pfpc_conns'], 'weight'), dtype=float)
+    weight_stats = {
+        'mean': float(np.mean(final_weights)),
+        'min':  float(np.min(final_weights)),
+        'max':  float(np.max(final_weights)),
+        'frac_depressed': float(np.mean(final_weights < par['Init_PFPC'] * 0.8)),
+    }
+
+    # ── Plots ────────────────────────────────────────────────────
+    progress_cb(88, "Generating plots")
+    colors = {'auditory': '#f4a261', 'visual': '#457b9d', 'audiovisual': '#2a9d8f'}
+
+    def _upload(fig, name):
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=120, bbox_inches='tight')
+        plt.close(fig)
+        size = buf.tell()
+        buf.seek(0)
+        minio_service.upload_file(buf, size, f"{base_path}/{name}", content_type='image/png')
+
+    # 1. DCN + PC rates — full timeline
+    fig, axes = plt.subplots(2, 1, figsize=(18, 8), sharex=True)
+    ts = t_bins_a / 1000.0
+    l1, = axes[0].plot(ts, ma_a, color='#264653', lw=1.2, label='DCN_A (side A)')
+    l2, = axes[0].plot(ts, ma_b, color='#e76f51', lw=1.2, label='DCN_B (side B)', alpha=0.85)
+    vline = axes[0].axvline(train_time / 1000.0, color='black', ls='--', lw=1, alpha=0.6, label='Train → Test')
+    # Conditions are interleaved during test: shade each test-trial stimulus window by condition
+    for k, (cond, _side) in enumerate(test_specs):
+        x0 = (n_train + k) * TRIAL_MS / 1000.0
+        axes[0].axvspan(x0, x0 + STIM_MS / 1000.0, alpha=0.15, color=colors[cond])
+    cond_patches = [mpatches.Patch(color=colors[c], alpha=0.4, label=f'Test: {c}') for c in colors]
+    axes[0].set_ylabel('DCN Rate (Hz)')
+    axes[0].set_title('Cerebellar Conditioning — DCN Population Activity (test conditions interleaved)')
+    axes[0].legend(handles=[l1, l2, vline] + cond_patches, fontsize=7, ncol=3)
+
+    axes[1].plot(t_bins_pc / 1000.0, ma_pc, color='#2a9d8f', lw=1.0, label='PC (Purkinje)')
+    axes[1].axvline(train_time / 1000.0, color='black', ls='--', lw=1, alpha=0.6)
+    axes[1].set_xlabel('Time (s)')
+    axes[1].set_ylabel('PC Rate (Hz)')
+    axes[1].set_title('Purkinje Cell Population Activity')
+    axes[1].legend(fontsize=7)
+    fig.tight_layout()
+    _upload(fig, 'exp_cond_activation.png')
+
+    # 2. Response-time CDF (test phase)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for lbl, rts in rt_by_cond.items():
+        valid = [r for r in rts if not np.isnan(r) and r < TRIAL_MS]
+        if valid:
+            cnt, bins = np.histogram(valid, bins=10)
+            cdf = np.cumsum(cnt / max(cnt.sum(), 1))
+            ax.plot(bins[1:], cdf, '--o', label=lbl, color=colors.get(lbl, 'gray'), lw=1.5)
+    ax.set_xlim(0, 1000)
+    ax.set_ylim(0, 1.1)
+    ax.set_xlabel('Response Time (ms)')
+    ax.set_ylabel('CDF')
+    ax.set_title('Response-Time CDF — Test Phase (by Condition)')
+    ax.legend()
+    fig.tight_layout()
+    _upload(fig, 'exp_cond_cdf.png')
+
+    # 3. DCN raster — test phase
+    fig, axes = plt.subplots(2, 1, figsize=(16, 6), sharex=True)
+    mask_a = t_a >= train_time
+    mask_b = t_b >= train_time
+    axes[0].scatter((t_a[mask_a]) / 1000.0, snd_a[mask_a], s=0.4, color='#264653', alpha=0.5)
+    axes[0].set_ylabel('DCN_A neuron id')
+    axes[0].set_title('DCN_A Raster — Test Phase')
+    axes[1].scatter((t_b[mask_b]) / 1000.0, snd_b[mask_b], s=0.4, color='#e76f51', alpha=0.5)
+    axes[1].set_ylabel('DCN_B neuron id')
+    axes[1].set_title('DCN_B Raster — Test Phase')
+    axes[1].set_xlabel('Time (s)')
+    # Shade each interleaved test-trial stimulus window by its condition
+    for k, (cond, _side) in enumerate(test_specs):
+        x0 = (n_train + k) * TRIAL_MS / 1000.0
+        for ax_ in axes:
+            ax_.axvspan(x0, x0 + STIM_MS / 1000.0, alpha=0.12, color=colors[cond])
+    fig.tight_layout()
+    _upload(fig, 'exp_cond_raster.png')
+
+    # 4. Accuracy bar chart
+    fig, ax = plt.subplots(figsize=(6, 4))
+    lbls = list(accuracy.keys())
+    vals = [accuracy[l] for l in lbls]
+    bars = ax.bar(lbls, vals, color=[colors.get(l, 'gray') for l in lbls], width=0.5)
+    ax.axhline(50, color='red', ls='--', alpha=0.6, label='Chance (50 %)')
+    ax.set_ylim(0, 115)
+    ax.set_ylabel('Accuracy (%)')
+    ax.set_title('Lateralization Accuracy by Condition')
+    for bar, val in zip(bars, vals):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 2,
+                f'{val:.0f}%', ha='center', fontsize=11, fontweight='bold')
+    ax.legend()
+    fig.tight_layout()
+    _upload(fig, 'exp_cond_accuracy.png')
+
+    # 5. PF-PC weight distribution before and after training
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.hist(final_weights, bins=50, color='#264653', alpha=0.8, edgecolor='white')
+    ax.axvline(par['Init_PFPC'], color='red', ls='--', lw=1.5, label=f'Init weight ({par["Init_PFPC"]})')
+    ax.set_xlabel('PF-PC Synapse Weight')
+    ax.set_ylabel('Count')
+    ax.set_title(f'PF-PC Weight Distribution After Training '
+                 f'(mean={weight_stats["mean"]:.2f}, '
+                 f'{100*weight_stats["frac_depressed"]:.0f}% depressed)')
+    ax.legend()
+    fig.tight_layout()
+    _upload(fig, 'exp_cond_weights.png')
+
+    # 6. Per-trial timeline: winner annotation on activation
+    fig, ax = plt.subplots(figsize=(18, 5))
+    ax.plot(t_bins_a / 1000.0, ma_a, color='#264653', lw=1.1, label='DCN_A')
+    ax.plot(t_bins_b / 1000.0, ma_b, color='#e76f51', lw=1.1, label='DCN_B', alpha=0.8)
+    ax.axvline(train_time / 1000.0, color='black', ls='--', lw=1, alpha=0.7)
+    for r in trial_results:
+        t0_s = r['trial'] * TRIAL_MS / 1000.0
+        clr  = '#2a9d8f' if r['correct'] else '#e9c46a'
+        ax.axvspan(t0_s, t0_s + STIM_MS / 1000.0, alpha=0.18, color=clr)
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Rate (Hz)')
+    ax.set_title('DCN Activation — test trials (green=correct, yellow=error)')
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _upload(fig, 'exp_cond_timeline.png')
+
+    # ── Per-population raster + PSTH ──────────────────────────────
+    # These match the population ids in the network definition (GR, PC, IO,
+    # DCN_A, DCN_B), so the generic "Raster Plots & PSTH per Popolazione"
+    # section in the UI renders them via {pop_id}_raster.png / {pop_id}_histogram.png.
+    progress_cb(92, "Generating per-population raster + PSTH")
+    pop_specs = [
+        ('GR',    snd_gr, t_gr, par['GR_num']),
+        ('PC',    snd_pc, t_pc, PC_n),
+        ('IO',    snd_io, t_io, len(net['IO'])),
+        ('DCN_A', snd_a,  t_a,  DCN_a_n),
+        ('DCN_B', snd_b,  t_b,  DCN_b_n),
+    ]
+    rng_plot = np.random.default_rng(0)
+    for pop_id, snd, tms, n_neu in pop_specs:
+        # Raster (subsample dense populations to keep the PNG light)
+        fig, ax = plt.subplots(figsize=(16, 4))
+        if len(tms) > 80000:
+            idx = rng_plot.choice(len(tms), 80000, replace=False)
+            tp, sp = tms[idx], snd[idx]
+        else:
+            tp, sp = tms, snd
+        ax.scatter(tp / 1000.0, sp, s=0.3, color='#264653', alpha=0.4)
+        ax.axvline(train_time / 1000.0, color='red', ls='--', lw=1, alpha=0.6, label='Train → Test')
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel(f'{pop_id} neuron id')
+        ax.set_title(f'{pop_id} — Raster Plot (n={n_neu})')
+        ax.legend(fontsize=7)
+        fig.tight_layout()
+        _upload(fig, f'{pop_id}_raster.png')
+
+        # PSTH (population mean firing rate)
+        tb, rt = _bin_rates(tms, n_neu, 0, total_time, bin_ms=50.0)
+        fig, ax = plt.subplots(figsize=(16, 4))
+        ax.plot(tb / 1000.0, rt, color='#2a9d8f', lw=0.8)
+        ax.axvline(train_time / 1000.0, color='red', ls='--', lw=1, alpha=0.6)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Rate (Hz)')
+        ax.set_title(f'{pop_id} — Population Firing Rate (PSTH)')
+        fig.tight_layout()
+        _upload(fig, f'{pop_id}_histogram.png')
+
+    # ── Metrics JSON ─────────────────────────────────────────────
+    progress_cb(96, "Saving metrics JSON")
+
+    metrics = {
+        'experiment': 'cerebellar_conditioning',
+        'n_train': n_train,
+        'n_test_per_condition': n_test,
+        'accuracy_pct': accuracy,
+        'median_rt_ms': median_rt,
+        'weight_stats': weight_stats,
+        'rt_by_condition': {
+            lbl: [None if np.isnan(r) else float(r) for r in rts]
+            for lbl, rts in rt_by_cond.items()
+        },
+        'trial_results': trial_results,
+        'network_params': {k: v for k, v in par.items()},
+        'train_modality_sequence': train_modality,
+        'train_side_sequence': train_side_seq,
+        'test_sequence': test_sequence,
+    }
+
+    def _upload_json(obj, name):
+        data = json.dumps(obj, indent=2).encode()
+        minio_service.upload_file(io.BytesIO(data), len(data),
+                                  f"{base_path}/{name}", content_type='application/json')
+
+    _upload_json(metrics, 'experiment_metrics.json')
+
+    spikes_obj = {
+        'DCN_a': {'senders': snd_a.tolist(), 'times': t_a.tolist()},
+        'DCN_b': {'senders': snd_b.tolist(), 'times': t_b.tolist()},
+    }
+    _upload_json(spikes_obj, 'spikes.json')
+
+    progress_cb(100, "Cerebellar conditioning complete")
+    gc.collect()
+    return metrics

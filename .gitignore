@@ -1,0 +1,72 @@
+# ==========================================
+# MuSiN — .gitignore
+# ==========================================
+
+# --- Secrets / environment ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# --- Node / Angular (frontend) ---
+frontend/node_modules/
+node_modules/
+frontend/dist/
+dist/
+frontend/.angular/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# --- Docker / runtime data ---
+docker_stats_log.txt
+*.log
+auth.log
+
+# --- Database / storage volumes (if ever bind-mounted locally) ---
+data/mysql/
+data/minio/
+*.sqlite3
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*~
+
+# --- LLM / AI coding agents ---
+# Claude Code
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.claudeignore
+.mcp.json
+.anthropic/
+# Cursor
+.cursor/
+.cursorrules
+.cursorignore
+# GitHub Copilot / other agents
+.github/copilot-instructions.md
+.aider*
+.continue/
+.windsurf/
+.codeium/
+# Generic agent/local context + scratch
+.ai/
+*.local.md
