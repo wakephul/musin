@@ -1,7 +1,9 @@
 name: CI
 
+# Una sola esecuzione per commit: i rami passano dalla pull request.
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
