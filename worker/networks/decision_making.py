@@ -227,11 +227,13 @@ def _build_network(nest, par, trains_a, trains_b, rng):
     nest.SetStatus(PG_noise_B, {"rate": float(rng.normal(p_rate_ex, p_rate_ex / par["std_noise"]))})
     nest.SetStatus(PG_noise_inh, {"rate": float(rng.normal(p_rate_in, p_rate_in / par["std_noise"]))})
 
+    # rec_pop: frazione di ogni popolazione da registrare (1.0 = tutti i neuroni).
     recorders = {}
     for pop_id, nodes in (("pop_A", pop_A), ("pop_B", pop_B), ("pop_inh", pop_inh)):
+        recorded = nodes[:max(1, min(len(nodes), int(float(par["rec_pop"]) * len(nodes))))]
         recorder = nest.Create("spike_recorder")
-        nest.Connect(nodes, recorder)
-        recorders[pop_id] = (recorder, len(nodes))
+        nest.Connect(recorded, recorder)
+        recorders[pop_id] = (recorder, len(recorded))
     return recorders
 
 
@@ -283,7 +285,10 @@ def run_decision_making_experiment(task, sim_info, exp_params, minio_service, pr
     progress_cb(92, "Analisi")
     spikes = {pop_id: nest_utils.spike_events(recorder) for pop_id, (recorder, _) in recorders.items()}
     sizes = {pop_id: size for pop_id, (_, size) in recorders.items()}
-    store.put_json("spikes.json", {"metadata": {"total_ms": total_ms, "seed": seed}, "spikes": spikes}, in_zip=False)
+    store.put_json("spikes.json", {
+        "metadata": {"simulation_id": sim_info["sim_id"], "total_ms": total_ms, "seed": seed},
+        "spikes": spikes,
+    }, in_zip=False)
     for pop_id, events in spikes.items():
         plot_population(store, pop_id, events, sizes[pop_id], total_ms, None)
 
@@ -350,6 +355,8 @@ def run_decision_making_experiment(task, sim_info, exp_params, minio_service, pr
         "experiment": "audiovisual_decision_making",
         "modality": modality,
         "num_trials": num_trials,
+        "trials_active_A": sides.count("pop_A"),
+        "trials_active_B": sides.count("pop_B"),
         "correct_trials": correct,
         "wrong_trials": num_trials - correct - missed,
         "missed_trials": missed,

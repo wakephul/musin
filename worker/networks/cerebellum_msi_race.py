@@ -219,7 +219,7 @@ def run_cerebellum_msi_race(task, sim_info, exp_params, minio_service, progress_
     progress_cb(92, "Analisi")
     spikes = {pop_id: nest_utils.spike_events(recorder) for pop_id, recorder in recorders.items()}
     store.put_json("spikes.json", {
-        "metadata": {"total_ms": total_ms, "train_end_ms": train_end, "seed": seed},
+        "metadata": {"simulation_id": sim_info["sim_id"], "total_ms": total_ms, "train_end_ms": train_end, "seed": seed},
         "spikes": spikes,
     }, in_zip=False)
     for pop_id, events in spikes.items():
@@ -240,6 +240,7 @@ def run_cerebellum_msi_race(task, sim_info, exp_params, minio_service, progress_
     # se lo fanno entrambe vale la prima.
     labels = [label for label, _, _ in TEST_CONDITIONS]
     reaction_times = {label: [] for label in labels}
+    winner_counts = {label: {} for label in labels}
     trial_counts = {label: 0 for label in labels}
     detection = {"hits": 0, "misses": 0, "wrong_pathway": 0, "false_alarms": 0, "correct_rejections": 0}
     details = []
@@ -255,6 +256,7 @@ def run_cerebellum_msi_race(task, sim_info, exp_params, minio_service, progress_
                 response, winner = crossing, pop_id
         if response is not None:
             reaction_times[label].append(response - start)
+            winner_counts[label][winner] = winner_counts[label].get(winner, 0) + 1
 
         expected = "none" if label == "CATCH" else "DCN_A"
         outcome = ("correct_rejections" if winner == "none" else "false_alarms") if label == "CATCH" else \
@@ -290,6 +292,8 @@ def run_cerebellum_msi_race(task, sim_info, exp_params, minio_service, progress_
         "n_V": len(reaction_times["V"]), "n_A": len(reaction_times["A"]), "n_AV": len(reaction_times["AV"]),
         "trials": {label: trial_counts[label] for label in ("V", "A", "AV")},
         "median_rt_ms": {label: median_or_none(reaction_times[label]) for label in ("V", "A", "AV")},
+        "reaction_times_ms": {label: [round(rt, 1) for rt in rts] for label, rts in reaction_times.items()},
+        "winner_counts": winner_counts,
         "max_rmi_violation": 0.0,
         "has_facilitation": False,
     }

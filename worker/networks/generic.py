@@ -116,6 +116,9 @@ def run_generic_experiment(task, sim_info, exp_params, minio_service, progress_c
             recorders[pop["id"]], recorded_sizes[pop["id"]] = nest_utils.record_spikes(nest, nodes)
 
     for proj in topology.get("projections", []):
+        for end in (proj["source"], proj["target"]):
+            if end not in populations:
+                raise ValueError(f"La proiezione {proj['source']} → {proj['target']} usa una popolazione inesistente: {end}")
         nest_utils.connect(
             nest, populations[proj["source"]], populations[proj["target"]],
             proj.get("rule", "all_to_all"), proj.get("params"), proj.get("synapse_model", "static_synapse"),
@@ -173,14 +176,15 @@ def run_generic_experiment(task, sim_info, exp_params, minio_service, progress_c
     else:
         simulate(train_ms, "Addestramento")
         if test_ms > 0 and phases.get("disable_plasticity_during_test", True):
-            freeze_plasticity(nest, topology.get("projections", []))
+            freeze_plasticity(nest, topology.get("projections", []) + inputs.get("connections", []))
         simulate(test_ms, "Test")
 
     # --- Risultati ---
     progress_cb(92, "Analisi")
     spikes = {pop_id: nest_utils.spike_events(recorder) for pop_id, recorder in recorders.items()}
     store.put_json("spikes.json", {
-        "metadata": {"total_ms": total_ms, "train_end_ms": train_ms if not trials else None, "seed": seed},
+        "metadata": {"simulation_id": sim_info["sim_id"], "total_ms": total_ms,
+                     "train_end_ms": train_ms if not trials else None, "seed": seed},
         "spikes": spikes,
     }, in_zip=False)
 
@@ -224,9 +228,10 @@ def run_generic_experiment(task, sim_info, exp_params, minio_service, progress_c
     progress_cb(100, "Completata")
 
 
-def freeze_plasticity(nest, projections: list) -> None:
-    """Azzera il tasso di apprendimento delle sinapsi plastiche (parametro `lambda` di stdp_synapse)."""
-    for model in {proj.get("synapse_model", "static_synapse") for proj in projections}:
+def freeze_plasticity(nest, connections: list) -> None:
+    """Azzera il tasso di apprendimento delle sinapsi plastiche (parametro `lambda` di stdp_synapse),
+    nelle proiezioni della rete e nelle connessioni di stimolo."""
+    for model in {conn.get("synapse_model", "static_synapse") for conn in connections}:
         if "lambda" in nest.GetDefaults(model):
             nest.GetConnections(synapse_model=model).set({"lambda": 0.0})
 
@@ -354,6 +359,7 @@ def response_times(store, pop_a, pop_b, label, spikes, sizes, trials, total_ms, 
         "median_by_condition": {c: median_or_none(rts) for c, rts in by_condition.items() if rts},
         "count_by_condition": {c: len(rts) for c, rts in by_condition.items()},
         "trials_by_condition": trial_counts,
+        "response_times_by_condition": {c: [round(rt, 1) for rt in rts] for c, rts in by_condition.items()},
         "trials": rows,
     }
 
@@ -383,6 +389,7 @@ def race_model(store, pop_id, times, trials):
         "n_V": len(latencies["V"]), "n_A": len(latencies["A"]), "n_AV": len(latencies["AV"]),
         "trials": trial_counts,
         "median_rt_ms": {condition: median_or_none(values) for condition, values in latencies.items()},
+        "reaction_times_ms": {condition: [round(v, 1) for v in values] for condition, values in latencies.items()},
         "max_rmi_violation": round(rmi["max_violation"], 4),
         "has_facilitation": rmi["max_violation"] > 0.05,
     }

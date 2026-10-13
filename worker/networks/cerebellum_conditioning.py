@@ -679,7 +679,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
 
     store.put_json('experiment_metrics.json', metrics)
     store.put_json('spikes.json', {
-        'metadata': {'total_ms': total_time, 'train_end_ms': train_time},
+        'metadata': {'simulation_id': sim_id, 'total_ms': total_time, 'train_end_ms': train_time},
         'spikes': {
             'DCN_A': {'senders': snd_a.tolist(), 'times': t_a.tolist()},
             'DCN_B': {'senders': snd_b.tolist(), 'times': t_b.tolist()},
