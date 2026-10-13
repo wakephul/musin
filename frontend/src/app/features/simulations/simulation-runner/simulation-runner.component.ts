@@ -5,12 +5,24 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { catchError, of } from 'rxjs';
 
 import { EXPERIMENT_LABELS, Network } from '../../../core/models';
+import { CampaignService } from '../../../core/services/campaign.service';
 import { NetworkService } from '../../../core/services/network.service';
 import { SimulationService } from '../../../core/services/simulation.service';
 import { StimulusService } from '../../../core/services/stimulus.service';
 import { apiErrorMessage } from '../../../core/utils/errors';
 import { formatNumber, plural } from '../../../core/utils/format';
 import { countNeurons } from '../../../core/utils/topology';
+import {
+  campaignDurationMs,
+  campaignMembers,
+  emptyCampaign,
+  isCampaign,
+  seedsOf,
+  sweepOf,
+  sweepOptions,
+  validateCampaign,
+} from './campaign-draft';
+import { CampaignFormComponent } from './campaign-form.component';
 import { ConditioningFormComponent } from './conditioning-form.component';
 import { ContinuousFormComponent } from './continuous-form.component';
 import { DecisionMakingFormComponent } from './decision-making-form.component';
@@ -56,6 +68,7 @@ const DESCRIPTIONS: Record<BuiltinKind, string> = {
     DecisionMakingFormComponent,
     TrialProtocolFormComponent,
     ContinuousFormComponent,
+    CampaignFormComponent,
   ],
   template: `
     <div class="page">
@@ -178,6 +191,9 @@ const DESCRIPTIONS: Record<BuiltinKind, string> = {
                   <dt class="label">Tempo biologico da simulare</dt>
                   <dd class="num text-base">{{ check.duration ?? 'non calcolabile' }}</dd>
                   <dd class="help">
+                    @if (check.simulations > 1) {
+                      In tutto, per {{ check.simulations }} simulazioni: il simulatore ne esegue una alla volta.
+                    }
                     @if (check.upperBound) {
                       Stima per eccesso: l'intervallo tra trial è casuale.
                     }
@@ -185,6 +201,13 @@ const DESCRIPTIONS: Record<BuiltinKind, string> = {
                   </dd>
                 </dl>
               </div>
+
+              <app-campaign-form
+                class="border-t border-line pt-4"
+                [draft]="campaign"
+                [options]="check.sweepOptions"
+                [campaign]="check.campaign"
+              />
 
               @if (check.blockers.length) {
                 <div class="notice" aria-live="polite">
@@ -205,7 +228,7 @@ const DESCRIPTIONS: Record<BuiltinKind, string> = {
                 [disabled]="launching() || check.blockers.length > 0"
                 (click)="launch()"
               >
-                {{ launching() ? 'Avvio in corso…' : 'Avvia simulazione' }}
+                {{ launching() ? 'Avvio in corso…' : check.campaign ? 'Avvia campagna' : 'Avvia simulazione' }}
               </button>
             </div>
           </section>
@@ -223,6 +246,7 @@ const DESCRIPTIONS: Record<BuiltinKind, string> = {
 export class SimulationRunnerComponent {
   private networks = inject(NetworkService);
   private simulations = inject(SimulationService);
+  private campaigns = inject(CampaignService);
   private router = inject(Router);
   private destroyRef = inject(DestroyRef);
 
@@ -255,6 +279,7 @@ export class SimulationRunnerComponent {
    * la propria: al lancio parte solo quella attiva.
    */
   protected state = stateFromParams(history.state?.cloneParams);
+  protected campaign = emptyCampaign();
   protected name = '';
 
   constructor() {
@@ -279,15 +304,21 @@ export class SimulationRunnerComponent {
     return inheritedParams(this.state.builtin, this.state.builtinDrafts[this.state.builtin]).join(', ');
   }
 
-  /** Durata e impedimenti al lancio per la modalità attiva. */
-  protected review(): { duration: string | null; upperBound: boolean; blockers: string[] } {
+  /** Durata e impedimenti al lancio per la modalità attiva, campagna inclusa. */
+  protected review() {
     const params = buildParams(this.state);
     const kind = experimentKind(params);
-    const ms = estimateDurationMs(params);
+    const blockers = validateState(this.state, { populations: this.populations(), stimuli: this.stimuli() ?? null });
+    const campaignBlockers = validateCampaign(params, this.campaign);
+    // Con una campagna non valida il totale non ha senso: si mostra la durata di una simulazione.
+    const ms = campaignBlockers.length ? estimateDurationMs(params) : campaignDurationMs(params, this.campaign);
     return {
       duration: Number.isFinite(ms) && ms > 0 ? `${formatNumber(ms / 1000, 1, 0)} s` : null,
+      simulations: campaignBlockers.length ? 1 : campaignMembers(params, this.campaign).length,
       upperBound: kind === 'cerebellum_msi_race' || (kind === 'trial_protocol' && this.state.trials.iti_random),
-      blockers: validateState(this.state, { populations: this.populations(), stimuli: this.stimuli() ?? null }),
+      campaign: isCampaign(this.campaign),
+      sweepOptions: sweepOptions(params),
+      blockers: [...blockers, ...campaignBlockers],
     };
   }
 
@@ -296,15 +327,36 @@ export class SimulationRunnerComponent {
     if (!network || this.launching() || this.review().blockers.length) return;
     this.launching.set(true);
     this.launchError.set(null);
+    const params = buildParams(this.state);
+    const name = this.name.trim() || undefined;
+    const fail = (fallback: string) => (err: unknown) => {
+      this.launchError.set(apiErrorMessage(err, fallback));
+      this.launching.set(false);
+    };
+
+    if (isCampaign(this.campaign)) {
+      this.campaigns
+        .createCampaign({
+          network_id: network.id,
+          name,
+          params,
+          seeds: seedsOf(params, this.campaign),
+          sweep: sweepOf(this.campaign),
+          save_spikes: this.campaign.saveSpikes,
+        })
+        .pipe(takeUntilDestroyed(this.destroyRef))
+        .subscribe({
+          next: (campaign) => this.router.navigate(['/campaigns', campaign.id]),
+          error: fail('Campagna non avviata.'),
+        });
+      return;
+    }
     this.simulations
-      .launchSimulation(network.id, buildParams(this.state), this.name.trim() || undefined)
+      .launchSimulation(network.id, params, name)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: ({ simulation_id }) => this.router.navigate(['/simulations/detail', simulation_id]),
-        error: (err) => {
-          this.launchError.set(apiErrorMessage(err, 'Simulazione non avviata.'));
-          this.launching.set(false);
-        },
+        error: fail('Simulazione non avviata.'),
       });
   }
 }

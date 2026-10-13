@@ -121,6 +121,8 @@ export interface Simulation {
   id: number;
   name: string;
   network_id: number;
+  /** Campagna di cui la simulazione fa parte, se è una ripetizione. */
+  campaign_id?: number | null;
   network_name: string | null;
   owner_id: number;
   status: SimulationStatus;
@@ -283,3 +285,85 @@ export const EXPERIMENT_LABELS: Record<ExperimentKind, string> = {
   trial_protocol: 'Protocollo a trial',
   continuous: 'Simulazione continua',
 };
+
+// --- Campagne ---
+
+/** Parametro che varia tra le simulazioni di una campagna: percorso nei parametri di lancio e valori. */
+export interface Sweep {
+  path: string;
+  values: number[];
+}
+
+export interface CampaignMember {
+  id: number;
+  seed: number | null;
+  value: number | null;
+  status: SimulationStatus;
+  error_message: string | null;
+}
+
+export interface Campaign {
+  id: number;
+  name: string;
+  network_id: number;
+  network_name: string | null;
+  experiment: ExperimentKind;
+  params: Record<string, any>;
+  seeds: number[];
+  sweep: Sweep | null;
+  /** Chiave del set di riferimento con cui si confrontano i risultati. */
+  reference: string | null;
+  /** Tempo biologico di tutte le simulazioni insieme. */
+  duration_ms: number;
+  counts: Record<SimulationStatus, number>;
+  created_at: string;
+  /** Vuoto negli elenchi, pieno nel dettaglio. */
+  simulations: CampaignMember[];
+}
+
+export interface ReferenceComparison {
+  responses: number;
+  median_ms: number | null;
+  percentiles_ms: number[];
+  /** Differenza tra le mediane (simulato − riferimento); null con troppo pochi tempi. */
+  comparison: { difference_ms: number; ci95_ms: [number, number]; differs: boolean } | null;
+}
+
+export interface CampaignCondition {
+  /** A, V, AV oppure race (modello a gara a coppie). */
+  label: string;
+  trials: number | null;
+  responses: number;
+  median_ms: number | null;
+  ci95_ms: [number, number] | null;
+  percentiles_ms: number[];
+  reference?: ReferenceComparison;
+}
+
+/** Tempi di risposta della stessa popolazione in tutte le simulazioni completate di un valore. */
+export interface CampaignGroup {
+  population: string;
+  note: string | null;
+  method: string | null;
+  simulations: number;
+  conditions: CampaignCondition[];
+  percentile_levels: number[];
+  percentiles_av_faster_than_race: number | null;
+  rmi: { max_violation: number; p_value: number | null; significant: boolean } | null;
+  per_simulation: { simulation_id: number; seed: number | null; median_ms: Record<string, number | null> }[];
+}
+
+export interface CampaignSummary {
+  completed: number;
+  reference: string | null;
+  points: { value: number | null; groups: CampaignGroup[] }[];
+}
+
+export interface ReferenceSet {
+  /** "builtin:<chiave>" o "user:<id>". */
+  key: string;
+  name: string;
+  source: string | null;
+  responses: Record<string, number>;
+  deletable: boolean;
+}

@@ -39,7 +39,11 @@ const SILENCE_MS = 10_000;
   template: `
     <div class="page">
       <p class="breadcrumb">
-        <a routerLink="/dashboard">Panoramica</a> / Simulazione <span class="num">#{{ id }}</span>
+        <a routerLink="/dashboard">Panoramica</a> /
+        @if (simulation()?.campaign_id; as campaignId) {
+          <a [routerLink]="['/campaigns', campaignId]">Campagna <span class="num">#{{ campaignId }}</span></a> /
+        }
+        Simulazione <span class="num">#{{ id }}</span>
       </p>
 
       @if (gone(); as message) {
@@ -307,11 +311,12 @@ export class SimulationDetailComponent {
     this.busy.set(true);
     // Il polling si ferma prima: altrimenti il suo 404 mostrerebbe "eliminata" un attimo prima del ritorno alla panoramica.
     this.stopPolling();
+    const campaignId = this.simulation()?.campaign_id;
     this.simulationService
       .deleteSimulation(this.id)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
-        next: () => this.router.navigate(['/dashboard']),
+        next: () => this.router.navigate(campaignId ? ['/campaigns', campaignId] : ['/dashboard']),
         error: (err) => {
           this.actionError.set(apiErrorMessage(err, 'Simulazione non eliminata.'));
           this.busy.set(false);
@@ -325,8 +330,8 @@ export class SimulationDetailComponent {
   }
 
   protected relaunch(simulation: Simulation): void {
-    this.router.navigate(['/simulations/run', simulation.network_id], {
-      state: { cloneParams: simulation.experiment_params },
-    });
+    // `save_spikes` è una scelta della campagna, non un parametro dell'esperimento: un rilancio singolo li salva.
+    const { save_spikes: _, ...params } = simulation.experiment_params;
+    this.router.navigate(['/simulations/run', simulation.network_id], { state: { cloneParams: params } });
   }
 }

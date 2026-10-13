@@ -8,12 +8,13 @@ import { apiErrorMessage } from '../../../core/utils/errors';
 import { formatNumber } from '../../../core/utils/format';
 import { countNeurons, countSynapses } from '../../../core/utils/topology';
 import { ConfirmButtonComponent } from '../../../shared/components/confirm-button/confirm-button.component';
+import { CampaignListComponent } from './campaign-list.component';
 import { SimulationListComponent } from './simulation-list.component';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [DatePipe, RouterLink, ConfirmButtonComponent, SimulationListComponent],
+  imports: [DatePipe, RouterLink, ConfirmButtonComponent, CampaignListComponent, SimulationListComponent],
   template: `
     <div class="page space-y-6">
       <h1 class="page-title">Panoramica</h1>
@@ -74,7 +75,7 @@ import { SimulationListComponent } from './simulation-list.component';
                           }
                           <app-confirm-button
                             #remove
-                            hint="Elimina anche le simulazioni e i risultati di questa rete."
+                            hint="Elimina anche le simulazioni, le campagne e i risultati di questa rete."
                             [disabled]="busyId() === row.network.id"
                             (confirmed)="delete(row.network)"
                           />
@@ -93,6 +94,7 @@ import { SimulationListComponent } from './simulation-list.component';
         }
       </section>
 
+      <app-campaign-list />
       <app-simulation-list />
     </div>
   `,
@@ -100,6 +102,7 @@ import { SimulationListComponent } from './simulation-list.component';
 export class DashboardComponent {
   private networkService = inject(NetworkService);
   private simulationList = viewChild.required(SimulationListComponent);
+  private campaignList = viewChild.required(CampaignListComponent);
 
   /** `null` finché il primo caricamento non è arrivato. */
   protected networks = signal<Network[] | null>(null);
@@ -134,8 +137,9 @@ export class DashboardComponent {
     this.networkService.deleteNetwork(network.id).subscribe({
       next: () => {
         this.load();
-        // Con la rete il server elimina anche le sue simulazioni.
+        // Con la rete il server elimina anche le sue simulazioni e le sue campagne.
         this.simulationList().reload();
+        this.campaignList().reload();
       },
       error: (err) => this.fail(err, 'Rete non eliminata.'),
     });

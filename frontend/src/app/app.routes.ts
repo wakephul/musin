@@ -53,6 +53,11 @@ export const routes: Routes = [
           import('./features/simulations/simulation-detail/simulation-detail.component').then((m) => m.SimulationDetailComponent),
       },
       {
+        path: 'campaigns/:id',
+        loadComponent: () =>
+          import('./features/campaigns/campaign-detail.component').then((m) => m.CampaignDetailComponent),
+      },
+      {
         path: 'stimuli',
         loadComponent: () => import('./features/stimuli/stimuli.component').then((m) => m.StimuliComponent),
       },
