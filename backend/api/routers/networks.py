@@ -5,8 +5,9 @@ from fastapi import APIRouter, HTTPException, status
 
 from backend.api.deps import CurrentUser, SessionDep
 from backend.core.nest_models import MODEL_CATALOGUE
-from backend.models import Network, Simulation
+from backend.models import Campaign, Network, Simulation
 from backend.schemas import NetworkCreate, NetworkFork, NetworkResponse, NetworkUpdate
+from backend.services.campaigns import delete_campaign_rows
 from backend.services.storage import storage
 
 router = APIRouter(prefix="/networks", tags=["Networks"])
@@ -85,6 +86,8 @@ def update_network(db: SessionDep, current_user: CurrentUser, network_id: int, n
 def delete_network(db: SessionDep, current_user: CurrentUser, network_id: int) -> None:
     """Elimina la rete con le sue simulazioni e i relativi risultati."""
     network = _get_owned_network(db, network_id, current_user.id)
+    for campaign in db.query(Campaign).filter(Campaign.network_id == network.id).all():
+        delete_campaign_rows(db, campaign)
     for simulation in db.query(Simulation).filter(Simulation.network_id == network.id).all():
         if simulation.results_path:
             storage.delete_tree(simulation.results_path)

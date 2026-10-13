@@ -7,14 +7,12 @@ from fastapi import APIRouter, Form, HTTPException, Query, status
 from sqlalchemy import func
 
 from backend.api.deps import CurrentUser, SessionDep
-from backend.core.config import settings
-from backend.core.nest_models import SPIKE_TRAIN_STIMULUS
-from backend.models import Network, Simulation, SimulationStatus, Stimulus
+from backend.models import Network, Simulation, SimulationStatus
 from backend.schemas import SimulationPage, SimulationResponse
-from backend.services.experiments import estimate_duration_ms, experiment_kind
+from backend.services.experiments import experiment_kind
+from backend.services.launching import checked_duration_ms, enqueue
 from backend.services.storage import storage
 from worker.celery_app import celery_app
-from worker.tasks import run_simulation_task
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +40,7 @@ def _to_response(simulation: Simulation) -> SimulationResponse:
         id=simulation.id,
         name=simulation.name,
         network_id=simulation.network_id,
+        campaign_id=simulation.campaign_id,
         network_name=simulation.network.name if simulation.network else None,
         owner_id=simulation.owner_id,
         status=simulation.status,
@@ -63,7 +62,8 @@ def read_simulations(
     status_filter: Optional[SimulationStatus] = Query(None, alias="status"),
     network_id: Optional[int] = None,
 ) -> SimulationPage:
-    owned = db.query(Simulation).filter(Simulation.owner_id == current_user.id)
+    # Le simulazioni di una campagna si vedono dalla pagina della campagna, non qui.
+    owned = db.query(Simulation).filter(Simulation.owner_id == current_user.id, Simulation.campaign_id.is_(None))
     counts = dict.fromkeys((s.value for s in SimulationStatus), 0)
     for sim_status, count in owned.with_entities(Simulation.status, func.count()).group_by(Simulation.status):
         counts[sim_status.value] = count
@@ -75,29 +75,6 @@ def read_simulations(
         filtered = filtered.filter(Simulation.network_id == network_id)
     items = filtered.order_by(Simulation.id.desc()).offset(skip).limit(limit).all()
     return SimulationPage(items=[_to_response(s) for s in items], total=filtered.count(), counts=counts)
-
-
-def _check_stimulus_devices(db, params: dict, user_id: int) -> None:
-    """I device 'treni da file' devono puntare a uno stimolo dell'utente."""
-    inputs = params.get("inputs") or {}
-    for device in inputs.get("devices", []) if isinstance(inputs, dict) else []:
-        if device.get("model") != SPIKE_TRAIN_STIMULUS:
-            continue
-        stimulus_id = (device.get("params") or {}).get("stimulus_id")
-        stimulus = isinstance(stimulus_id, int) and db.query(Stimulus).filter(
-            Stimulus.id == stimulus_id, Stimulus.owner_id == user_id
-        ).first()
-        if not stimulus:
-            raise HTTPException(
-                422,
-                f"Il device '{device.get('id')}' non ha uno stimolo valido selezionato",
-            )
-        # Gli stimoli caricati prima della libreria sono file grezzi che il worker non sa leggere.
-        if not (stimulus.definition or {}).get("n_trains"):
-            raise HTTPException(
-                422,
-                f"Lo stimolo '{stimulus.name}' è stato caricato con una versione precedente: caricalo di nuovo dalla pagina Stimoli",
-            )
 
 
 @router.post("/launch", status_code=status.HTTP_201_CREATED)
@@ -123,19 +100,7 @@ def launch_simulation(
     if not isinstance(parsed_params, dict):
         raise HTTPException(422, "I parametri devono essere un oggetto JSON")
 
-    try:
-        total_duration_ms = estimate_duration_ms(parsed_params)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    if total_duration_ms <= 0:
-        raise HTTPException(422, "La durata totale della simulazione deve essere maggiore di 0")
-    if total_duration_ms > settings.MAX_SIMULATION_MS:
-        raise HTTPException(
-            422,
-            f"La simulazione durerebbe {total_duration_ms / 1000:.0f} s di tempo biologico: "
-            f"il massimo è {settings.MAX_SIMULATION_MS / 1000:.0f} s",
-        )
-    _check_stimulus_devices(db, parsed_params, current_user.id)
+    total_duration_ms = checked_duration_ms(db, parsed_params, current_user.id)
 
     simulation = Simulation(
         name=name or network.name,
@@ -150,17 +115,7 @@ def launch_simulation(
     db.commit()
     db.refresh(simulation)
 
-    try:
-        task = run_simulation_task.delay(simulation.id)
-    except Exception as exc:
-        logger.error("Accodamento della simulazione %s fallito: %s", simulation.id, exc)
-        simulation.status = SimulationStatus.FAILED
-        simulation.error_message = "Coda di simulazione non raggiungibile"
-        db.commit()
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Coda di simulazione non raggiungibile") from exc
-
-    simulation.celery_task_id = task.id
-    db.commit()
+    enqueue(db, [simulation])
     return {"simulation_id": simulation.id}
 
 

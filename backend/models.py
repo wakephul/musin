@@ -64,6 +64,41 @@ class Stimulus(Base):
     parent: Mapped[Optional["Stimulus"]] = relationship("Stimulus", remote_side=[id], backref="forks")
     simulations: Mapped[List["Simulation"]] = relationship("Simulation", back_populates="stimulus")
 
+class Campaign(Base):
+    """Lo stesso esperimento ripetuto con più seed e, se indicato, con un parametro che varia.
+    Ogni combinazione è una simulazione con `campaign_id` uguale all'id della campagna."""
+    __tablename__ = "campaigns"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    network_id: Mapped[int] = mapped_column(ForeignKey("networks.id", ondelete="RESTRICT"), nullable=False)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    # Parametri comuni a tutte le simulazioni; seed e parametro variabile li sovrascrivono.
+    params: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    seeds: Mapped[list[int]] = mapped_column(JSON, nullable=False)
+    # {"path": "decision_making.auditory_latency_ms", "values": [150, 180]} oppure null.
+    sweep: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    # Set di riferimento con cui si confrontano i risultati: "builtin:<chiave>" o "user:<id>".
+    reference: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    network: Mapped["Network"] = relationship("Network")
+
+
+class ReferenceSet(Base):
+    """Tempi di risposta di riferimento caricati dall'utente, per condizione."""
+    __tablename__ = "reference_sets"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    # {"A": [ms, ...], "V": [...], "AV": [...], "race": [...]}
+    conditions: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class Simulation(Base):
     __tablename__ = "simulations"
 
@@ -71,6 +106,7 @@ class Simulation(Base):
     name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     
     network_id: Mapped[int] = mapped_column(ForeignKey("networks.id", ondelete="RESTRICT"), nullable=False)
+    campaign_id: Mapped[Optional[int]] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=True, index=True)
     stimulus_id: Mapped[Optional[int]] = mapped_column(ForeignKey("stimuli.id", ondelete="SET NULL"), nullable=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     

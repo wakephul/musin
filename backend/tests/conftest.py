@@ -5,7 +5,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api.routers import simulations
+from backend.services import launching
 from backend.main import app
 from backend.services.storage import storage
 
@@ -36,7 +36,7 @@ def queued_tasks(monkeypatch):
         queued.append(simulation_id)
         return FakeAsyncResult()
 
-    monkeypatch.setattr(simulations.run_simulation_task, "delay", fake_delay)
+    monkeypatch.setattr(launching.run_simulation_task, "delay", fake_delay)
     return queued
 
 

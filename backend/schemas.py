@@ -155,6 +155,7 @@ class SimulationResponse(BaseModel):
     id: int
     name: str
     network_id: int
+    campaign_id: Optional[int] = None
     network_name: Optional[str] = None
     owner_id: int
     status: SimulationStatus
@@ -172,3 +173,70 @@ class SimulationPage(BaseModel):
     total: int
     # Conteggio per stato su tutte le simulazioni dell'utente, indipendente dai filtri.
     counts: Dict[str, int]
+
+
+# --- Campagne ---
+
+class Sweep(BaseModel):
+    # Percorso del parametro dentro i parametri di lancio, es. "decision_making.auditory_latency_ms".
+    path: str = Field(min_length=1, max_length=120)
+    values: List[float]
+
+
+class CampaignCreate(BaseModel):
+    network_id: int
+    name: Optional[str] = Field(default=None, max_length=255)
+    params: Dict[str, Any]
+    seeds: List[int] = Field(min_length=1, max_length=50)
+    sweep: Optional[Sweep] = None
+    # Gli spike di ogni simulazione: spenti di default, una campagna ne produce molti.
+    save_spikes: bool = False
+
+    @field_validator("seeds")
+    @classmethod
+    def seeds_in_range(cls, seeds: List[int]) -> List[int]:
+        if any(not 0 <= seed < 2**31 for seed in seeds):
+            raise ValueError("I seed devono essere interi non negativi")
+        return seeds
+
+
+class CampaignUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    # "builtin:<chiave>", "user:<id>" oppure null per togliere il confronto.
+    reference: Optional[str] = Field(default=None, max_length=64)
+
+
+class CampaignMember(BaseModel):
+    id: int
+    seed: Optional[int] = None
+    value: Optional[float] = None
+    status: SimulationStatus
+    error_message: Optional[str] = None
+
+
+class CampaignResponse(BaseModel):
+    id: int
+    name: str
+    network_id: int
+    network_name: Optional[str] = None
+    experiment: str
+    params: Dict[str, Any]
+    seeds: List[int]
+    sweep: Optional[Sweep] = None
+    reference: Optional[str] = None
+    # Durata biologica di tutte le simulazioni insieme.
+    duration_ms: float
+    # Simulazioni per stato.
+    counts: Dict[str, int]
+    created_at: UtcDatetime
+    simulations: List[CampaignMember] = Field(default_factory=list)
+
+
+class ReferenceSetResponse(BaseModel):
+    # "builtin:<chiave>" o "user:<id>": è il valore da mettere in `reference` di una campagna.
+    key: str
+    name: str
+    source: Optional[str] = None
+    # Numero di tempi di risposta per condizione.
+    responses: Dict[str, int]
+    deletable: bool
