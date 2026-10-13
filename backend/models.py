@@ -35,7 +35,6 @@ class Network(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     definition: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     
-    # Forking logic
     parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"), nullable=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     
@@ -52,10 +51,9 @@ class Stimulus(Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    file_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True) 
-    definition: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True) 
+    file_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    definition: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     
-    # Forking logic
     parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("stimuli.id", ondelete="SET NULL"), nullable=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     
@@ -76,15 +74,14 @@ class Simulation(Base):
     stimulus_id: Mapped[Optional[int]] = mapped_column(ForeignKey("stimuli.id", ondelete="SET NULL"), nullable=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     
-    # --- NUOVI CAMPI PER I METADATI DEL TRIAL ---
     duration_ms: Mapped[float] = mapped_column(Float, default=1000.0, nullable=False)
     experiment_params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    # --------------------------------------------
 
     status: Mapped[SimulationStatus] = mapped_column(Enum(SimulationStatus), default=SimulationStatus.PENDING, nullable=False)
     celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True, nullable=True)
-    results_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True) 
-    
+    results_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
