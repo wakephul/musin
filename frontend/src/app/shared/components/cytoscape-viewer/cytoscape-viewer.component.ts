@@ -102,7 +102,11 @@ function edgeData(proj: GraphProjection, index: number) {
         </svg>
         inibitoria
       </span>
-      <button type="button" class="btn btn-quiet btn-sm ml-auto" (click)="relayout()">Riordina</button>
+      <span class="ml-auto flex items-center gap-1">
+        <button type="button" class="btn btn-quiet btn-sm" (click)="zoomBy(0.8)" aria-label="Rimpicciolisci il grafo">−</button>
+        <button type="button" class="btn btn-quiet btn-sm" (click)="zoomBy(1.25)" aria-label="Ingrandisci il grafo">+</button>
+        <button type="button" class="btn btn-quiet btn-sm" (click)="relayout()">Riordina</button>
+      </span>
     </div>
   `,
 })
@@ -126,7 +130,7 @@ export class CytoscapeViewerComponent implements AfterViewInit {
     this.zone.runOutsideAngular(() => {
       this.cy = cytoscape({
         container: this.canvas().nativeElement,
-        maxZoom: 1,
+        maxZoom: 2.5,
         minZoom: 0.2,
         // La rotella deve continuare a scorrere la pagina anche sopra il grafo.
         userZoomingEnabled: false,
@@ -177,6 +181,13 @@ export class CytoscapeViewerComponent implements AfterViewInit {
       });
     });
     this.sync(this.populations(), this.projections());
+  }
+
+  /** La rotella scorre la pagina: lo zoom del grafo passa dai pulsanti. */
+  protected zoomBy(factor: number): void {
+    const cy = this.cy;
+    if (!cy) return;
+    cy.zoom({ level: cy.zoom() * factor, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
   }
 
   protected relayout(): void {
