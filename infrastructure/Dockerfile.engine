@@ -1,68 +1,70 @@
-# --- STAGE 1: Builder ---
+# Immagine comune ad API e worker: NEST 3.8 + CerebNEST compilati da sorgente.
+
+# --- Stage 1: compilazione ---
 FROM python:3.12-slim-bookworm AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Dipendenze di sistema e toolchain di compilazione nativa Debian
 RUN apt-get update -o Acquire::Retries=5 && apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
     build-essential git libltdl-dev libreadline-dev libncurses-dev libgsl-dev \
     python3-dev libboost-all-dev openmpi-bin libopenmpi-dev wget \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Python Tools
 RUN pip install --upgrade pip && pip install --no-cache-dir "cython<3" numpy cmake
 
-# 3. Compilazione NEST Simulator 3.8 da sorgente
 WORKDIR /src
 RUN git clone --branch v3.8 https://github.com/nest/nest-simulator.git
 WORKDIR /src/nest-simulator/build
 RUN cmake -DCMAKE_INSTALL_PREFIX:PATH=/opt/nest -Dwith-python=ON -Dwith-mpi=ON .. && \
     make -j$(nproc) && make install
 
-# 4. Compilazione CerebNEST (Branch nest_3_8 Ufficiale)
+# CerebNEST, branch nest_3_8, fissato a un commit: un branch può cambiare sotto i piedi.
 WORKDIR /src
-RUN git clone --branch nest_3_8 https://github.com/alberto-antonietti/CerebNEST.git
+RUN git clone --branch nest_3_8 https://github.com/alberto-antonietti/CerebNEST.git && \
+    git -C CerebNEST checkout 2925626b4262
 WORKDIR /src/CerebNEST/build
 RUN cmake -Dwith-nest=/opt/nest/bin/nest-config -DCMAKE_INSTALL_PREFIX=/opt/nest .. && \
     make -j$(nproc) && make install
 
-# --- STAGE 2: Runtime ---
+# --- Stage 2: runtime ---
 FROM python:3.12-slim-bookworm
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV LC_ALL=C.UTF-8
-ENV LANG=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8
 
-# Installiamo solo le librerie necessarie a runtime
 RUN apt-get update -o Acquire::Retries=5 && apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
     libgsl-dev libltdl7 libreadline8 openmpi-bin libopenmpi-dev libboost-serialization-dev \
     curl file && rm -rf /var/lib/apt/lists/*
 
-# Copiamo l'installazione pulita di NEST dal builder stage
 COPY --from=builder /opt/nest /opt/nest
 
-# Linker: Assicuriamoci che i moduli compilati siano al posto giusto
+# Il modulo CerebNEST viene installato con un nome che dipende dalla build:
+# lo si copia dove NEST cerca i moduli.
 RUN mkdir -p /opt/nest/lib/nest && \
-    find /opt/nest -name "cerebmodule.so" -exec cp {} /opt/nest/lib/nest/ \; || true && \
-    find /opt/nest -name "cerebellar_module.so" -exec cp {} /opt/nest/lib/nest/ \; || true
+    find /opt/nest \( -name "cerebmodule.so" -o -name "cerebellar_module.so" \) \
+        -not -path "/opt/nest/lib/nest/*" -exec cp {} /opt/nest/lib/nest/ \; && \
+    printf '/opt/nest/lib\n/opt/nest/lib/nest\n' > /etc/ld.so.conf.d/nest.conf && ldconfig
 
-# Configurazione ldconfig per le librerie condivise
-RUN echo "/opt/nest/lib" > /etc/ld.so.conf.d/nest.conf && \
-    echo "/opt/nest/lib/nest" >> /etc/ld.so.conf.d/nest.conf && \
-    ldconfig
-
-# Variabili d'ambiente nevralgiche
-ENV NEST_INSTALL_DIR=/opt/nest
-ENV PATH=$NEST_INSTALL_DIR/bin:$PATH
-ENV PYTHONPATH=$NEST_INSTALL_DIR/lib/python3.12/site-packages:$PYTHONPATH
-ENV LD_LIBRARY_PATH=/opt/nest/lib:/opt/nest/lib/nest:$LD_LIBRARY_PATH
+ENV NEST_INSTALL_DIR=/opt/nest \
+    PATH=/opt/nest/bin:$PATH \
+    PYTHONPATH=/app:/opt/nest/lib/python3.12/site-packages \
+    LD_LIBRARY_PATH=/opt/nest/lib:/opt/nest/lib/nest \
+    NEST_MODULE_PATH=/opt/nest/lib/nest \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-# 5. Installazione dipendenze API e Worker tramite file requirements
-# [FIX] Copiamo il requirements.txt partendo dalla cartella backend/
-COPY backend/requirements.txt .
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+COPY backend/requirements.txt backend/requirements.txt
+RUN pip install --upgrade pip && pip install --no-cache-dir -r backend/requirements.txt
 
-# Aggiungiamo /app al PYTHONPATH
-ENV PYTHONPATH=/app:$PYTHONPATH
+# In sviluppo docker-compose monta backend/ e worker/ sopra queste copie.
+COPY backend backend
+COPY worker worker
+COPY pytest.ini conftest.py ./
+
+RUN useradd --create-home --uid 1000 musin
+USER musin
+
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

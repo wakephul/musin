@@ -5,21 +5,12 @@ services:
       - .env
     volumes:
       - musin_db_data:/var/lib/mysql
+    # Database, Redis e console MinIO sono raggiungibili solo da questa macchina.
     ports:
-      - "3307:3306"
+      - "127.0.0.1:3307:3306"
     restart: unless-stopped
     healthcheck:
-      test:
-        [
-          "CMD",
-          "mysqladmin",
-          "ping",
-          "-h",
-          "localhost",
-          "-u",
-          "root",
-          "-p${MYSQL_ROOT_PASSWORD}",
-        ]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -28,7 +19,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -37,13 +28,14 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     env_file:
       - .env
     command: server /data --console-address ":9001"
+    # La porta 9050 serve al browser per scaricare grafici e risultati (URL firmati).
     ports:
       - "9050:9000"
-      - "9051:9001"
+      - "127.0.0.1:9051:9001"
     volumes:
       - musin_minio_data:/data
     restart: unless-stopped
@@ -53,7 +45,7 @@ services:
       timeout: 20s
       retries: 3
 
-  api:
+  api: &engine
     build:
       context: .
       dockerfile: infrastructure/Dockerfile.engine
@@ -61,14 +53,13 @@ services:
     env_file:
       - .env
     environment:
-      # [FIX] Mappatura speculare automatica delle credenziali MinIO
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
     volumes:
       - ./backend:/app/backend
       - ./worker:/app/worker
     ports:
-      - "8010:8000"
+      - "127.0.0.1:8010:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -79,10 +70,10 @@ services:
     restart: unless-stopped
 
   worker:
-    build:
-      context: .
-      dockerfile: infrastructure/Dockerfile.engine
+    <<: *engine
+    # Pool "solo": una simulazione alla volta, NEST usa già tutti i core assegnati.
     command: celery -A worker.celery_app worker --loglevel=info --pool=solo
+    ports: []
     deploy:
       resources:
         limits:
@@ -91,24 +82,6 @@ services:
         reservations:
           cpus: "6.0"
           memory: 6G
-    env_file:
-      - .env
-    environment:
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
-      - LD_LIBRARY_PATH=/opt/nest/lib/nest:${LD_LIBRARY_PATH:-}
-      - NEST_MODULE_PATH=/opt/nest/lib/nest
-    volumes:
-      - ./backend:/app/backend
-      - ./worker:/app/worker
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    restart: unless-stopped
 
   frontend:
     build:
