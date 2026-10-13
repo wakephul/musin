@@ -237,12 +237,12 @@ def _build_network(nest, par, trains_a, trains_b, rng):
     return recorders
 
 
-def run_decision_making_experiment(task, sim_info, exp_params, minio_service, progress_cb):
+def run_decision_making_experiment(task, sim_info, exp_params, storage, progress_cb):
     import nest
 
     cfg = {**DEFAULT_EXPERIMENT, **(exp_params.get("decision_making") or {})}
     par = {**DEFAULT_NETWORK_PARAMS, **(exp_params.get("network_overrides") or {}), "order": int(cfg["order"])}
-    store = ResultStore(minio_service, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
+    store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
     seed = int(cfg["seed"])
     rng = np.random.default_rng(seed)
 

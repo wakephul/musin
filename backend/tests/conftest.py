@@ -1,44 +1,12 @@
 import itertools
+import shutil
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api.routers import networks, simulations, stimuli
+from backend.api.routers import simulations
 from backend.main import app
-
-
-class FakeMinio:
-    """MinIO in memoria con la stessa interfaccia di MinioService."""
-
-    def __init__(self):
-        self.objects: dict[str, bytes] = {}
-
-    def upload_file(self, stream, size, object_name, content_type="application/octet-stream"):
-        self.objects[object_name] = stream.read()
-        return object_name
-
-    def upload_json(self, object_name, obj):
-        import json
-        self.objects[object_name] = json.dumps(obj).encode()
-        return object_name
-
-    def get_json_object(self, object_name):
-        import json
-        return json.loads(self.objects[object_name])
-
-    def get_presigned_url(self, object_name, expires=None):
-        return f"http://minio.test/{object_name}"
-
-    def list_objects_with_prefix(self, prefix):
-        prefix = prefix.rstrip("/") + "/"
-        return [name for name in self.objects if name.startswith(prefix)]
-
-    def delete_object(self, object_name):
-        self.objects.pop(object_name, None)
-
-    def delete_directory(self, prefix):
-        for name in self.list_objects_with_prefix(prefix):
-            del self.objects[name]
+from backend.services.storage import storage
 
 
 @pytest.fixture(scope="session")
@@ -48,11 +16,10 @@ def client():
 
 
 @pytest.fixture(autouse=True)
-def minio(monkeypatch):
-    fake = FakeMinio()
-    for module in (networks, simulations, stimuli):
-        monkeypatch.setattr(module, "minio_service", fake)
-    return fake
+def files():
+    """Lo storage vero, su cartella temporanea, svuotato a ogni test."""
+    shutil.rmtree(storage.root, ignore_errors=True)
+    return storage
 
 
 @pytest.fixture(autouse=True)

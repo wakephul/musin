@@ -54,19 +54,20 @@ def test_invalid_files_are_rejected(filename, content):
         parse_stimulus_file(filename, content)
 
 
-def test_upload_list_delete(client, auth, other_auth, minio):
+def test_upload_list_delete(client, auth, other_auth, files):
     upload = client.post(f"{API}/upload", data={"name": "Registrazione"}, headers=auth,
                          files={"file": ("rec.json", b'{"spike_trains": [[1.0, 2.0], [3.0]]}', "application/json")})
     assert upload.status_code == 201
     stimulus = upload.json()
     assert stimulus["definition"] == {"n_trains": 2, "n_spikes": 3, "duration_ms": 3.0, "source_filename": "rec.json"}
-    assert len(minio.objects) == 1 and next(iter(minio.objects.values())) == b'{"spike_trains": [[1.0, 2.0], [3.0]]}'
+    (stored,) = files.list("stimuli")
+    assert files.read_json(stored) == {"spike_trains": [[1.0, 2.0], [3.0]]}
 
     assert [s["id"] for s in client.get(API, headers=auth).json()] == [stimulus["id"]]
     assert client.get(API, headers=other_auth).json() == []
     assert client.delete(f"{API}/{stimulus['id']}", headers=other_auth).status_code == 404
     assert client.delete(f"{API}/{stimulus['id']}", headers=auth).status_code == 204
-    assert minio.objects == {}
+    assert files.list("stimuli") == []
 
 
 def test_upload_reports_format_errors(client, auth):

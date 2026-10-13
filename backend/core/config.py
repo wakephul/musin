@@ -29,12 +29,8 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
 
-    MINIO_URL: str = "minio:9000"
-    MINIO_EXTERNAL_URL: str = "localhost:9000"
-    MINIO_ACCESS_KEY: str = "minioadmin"
-    MINIO_SECRET_KEY: str = "minioadmin"
-    MINIO_BUCKET_NAME: str = "musin-storage"
-    MINIO_SECURE: bool = False
+    # Cartella dei risultati e degli stimoli, condivisa tra API e worker.
+    STORAGE_DIR: str = "/data"
 
     # Tetto al tempo biologico di una singola simulazione (1 ora): evita che un
     # parametro sbagliato occupi il worker per giorni.

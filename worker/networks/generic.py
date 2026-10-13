@@ -88,11 +88,11 @@ def stimulus_spike_trains(device: dict, trials: list, total_ms: float, rng, reso
     return [sorted(set(train)) for train in trains]
 
 
-def run_generic_experiment(task, sim_info, exp_params, minio_service, progress_cb):
+def run_generic_experiment(task, sim_info, exp_params, storage, progress_cb):
     import nest
 
     topology = sim_info["network_definition"].get("topology", {})
-    store = ResultStore(minio_service, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
+    store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
     resolution = float(exp_params.get("resolution", 0.1))
     seed = int(exp_params.get("seed", 1234))
     rng = np.random.default_rng(seed)

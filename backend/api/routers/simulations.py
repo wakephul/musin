@@ -12,7 +12,7 @@ from backend.core.nest_models import SPIKE_TRAIN_STIMULUS
 from backend.models import Network, Simulation, SimulationStatus, Stimulus
 from backend.schemas import SimulationPage, SimulationResponse
 from backend.services.experiments import estimate_duration_ms, experiment_kind
-from backend.services.minio_client import minio_service
+from backend.services.storage import storage
 from worker.celery_app import celery_app
 from worker.tasks import run_simulation_task
 
@@ -208,10 +208,10 @@ def get_simulation_results(db: SessionDep, current_user: CurrentUser, simulation
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Risultati non disponibili")
 
     base_path = simulation.results_path
-    files = {name.split("/")[-1] for name in minio_service.list_objects_with_prefix(base_path)}
+    files = {name.split("/")[-1] for name in storage.list(base_path)}
 
     def url(filename: str) -> Optional[str]:
-        return minio_service.get_presigned_url(f"{base_path}/{filename}") if filename in files else None
+        return storage.signed_url(f"{base_path}/{filename}") if filename in files else None
 
     def stem(filename: str, prefix: str) -> Optional[str]:
         if filename.startswith(prefix) and filename.endswith(".png"):
@@ -255,7 +255,7 @@ def get_simulation_results(db: SessionDep, current_user: CurrentUser, simulation
             response_graphs.append({"kind": "cdf", "pair": name, "url": url(filename)})
 
     json_results = {
-        key: (minio_service.get_json_object(f"{base_path}/{filename}") if filename in files else None)
+        key: (storage.read_json(f"{base_path}/{filename}") if filename in files else None)
         for key, filename in RESULT_JSON_FILES.items()
     }
 
@@ -277,6 +277,6 @@ def delete_simulation(db: SessionDep, current_user: CurrentUser, simulation_id: 
     """Elimina la simulazione. Se è in corso, il worker si ferma al controllo successivo."""
     simulation = _get_owned_simulation(db, simulation_id, current_user.id)
     if simulation.results_path:
-        minio_service.delete_directory(simulation.results_path)
+        storage.delete_tree(simulation.results_path)
     db.delete(simulation)
     db.commit()

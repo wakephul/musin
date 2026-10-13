@@ -85,7 +85,7 @@ def test_simulations_are_private_and_ids_are_validated(client, auth, other_auth,
     assert client.get(f"{API}/abc/status", headers=auth).status_code == 422
 
 
-def test_results_are_built_from_the_files_the_worker_produced(client, auth, network, minio):
+def test_results_are_built_from_the_files_the_worker_produced(client, auth, network, files):
     simulation_id = launch(client, auth, network).json()["simulation_id"]
     assert client.get(f"{API}/{simulation_id}/results", headers=auth).status_code == 404  # non ancora completata
 
@@ -94,15 +94,15 @@ def test_results_are_built_from_the_files_the_worker_produced(client, auth, netw
                  "exp_cond_raster.png", "diff_GR_PC_A.png",
                  "diff_DCN_A__DCN_B.png", "rmi_DCN_A.png", "exp_cond_weights.png",
                  "activation_test_DCN_AB.png", "cdf_test_DCN_AB.png", "spikes.json"):
-        minio.objects[f"{base}/{name}"] = b"x"
-    minio.objects[f"{base}/accuracy_metrics.json"] = b'{"metrics": []}'
+        files.write(f"{base}/{name}", b"x")
+    files.write(f"{base}/accuracy_metrics.json", b'{"metrics": []}')
     set_status(simulation_id, SimulationStatus.COMPLETED, base)
 
     results = client.get(f"{API}/{simulation_id}/results", headers=auth).json()
     # Ordine della rete (GR, PC_A), poi le popolazioni che la rete non ha.
     assert [g["population_id"] for g in results["population_graphs"]] == ["GR", "PC_A", "pop_X"]
     assert results["population_graphs"][0]["histogram_url"] is None
-    assert results["population_graphs"][1]["histogram_url"].endswith("PC_A_histogram.png")
+    assert "/PC_A_histogram.png?" in results["population_graphs"][1]["histogram_url"]
     # Il nome nuovo (doppio underscore) e quello dei risultati vecchi danno la stessa etichetta.
     assert [g["label"] for g in results["differential_graphs"]] == ["DCN_A − DCN_B", "GR − PC_A"]
     assert results["race_model_graphs"][0]["population"] == "DCN_A"
@@ -110,19 +110,21 @@ def test_results_are_built_from_the_files_the_worker_produced(client, auth, netw
     assert {(g["kind"], g["pair"]) for g in results["response_graphs"]} == {("activation", "test_DCN_AB"), ("cdf", "test_DCN_AB")}
     assert results["accuracy_metrics"] == {"metrics": []}
     assert results["race_model_data"] is None
-    assert results["graphs_zip_url"] is None and results["raw_file_url"].endswith("spikes.json")
+    assert results["graphs_zip_url"] is None and "/spikes.json?" in results["raw_file_url"]
+    # I link sono scaricabili senza token, come li usa un tag <img>.
+    assert client.get(results["raw_file_url"]).content == b"x"
 
 
-def test_delete_removes_only_that_simulation_results(client, auth, network, minio):
+def test_delete_removes_only_that_simulation_results(client, auth, network, files):
     """Regressione: eliminare sim_1 cancellava anche i file di sim_10, sim_11, ..."""
     simulation_id = launch(client, auth, network).json()["simulation_id"]
     base = f"results/1/sim_{simulation_id}"
-    minio.objects[f"{base}/spikes.json"] = b"x"
-    minio.objects[f"{base}0/spikes.json"] = b"other simulation"
+    files.write(f"{base}/spikes.json", b"x")
+    files.write(f"{base}0/spikes.json", b"other simulation")
     set_status(simulation_id, SimulationStatus.COMPLETED, base)
 
     assert client.delete(f"{API}/{simulation_id}", headers=auth).status_code == 204
-    assert list(minio.objects) == [f"{base}0/spikes.json"]
+    assert files.list("results") == [f"{base}0/spikes.json"]
     assert client.get(f"{API}/{simulation_id}", headers=auth).status_code == 404
 
 

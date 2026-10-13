@@ -29,16 +29,10 @@ docker compose up --build -d
 
 The first build compiles NEST and CerebNEST from source and takes about ten minutes.
 
-> **MinIO image.** MinIO no longer publishes `minio/minio` on Docker Hub, so on a
-> machine that does not already have the image `docker compose up` fails to pull it.
-> Set `MINIO_IMAGE` in `.env` to an S3-compatible MinIO build you trust, pinned by
-> digest (`name@sha256:…`).
-
 | What             | Where                      |
 | ---------------- | -------------------------- |
 | Web app          | http://localhost:3000      |
 | API docs         | http://localhost:8010/docs |
-| MinIO console    | http://localhost:9051      |
 
 Sign in with `FIRST_SUPERUSER_EMAIL` / `FIRST_SUPERUSER_PASSWORD` from your `.env`,
 or create an account from the sign-in page (`ALLOW_REGISTRATION=false` turns that off).
@@ -115,14 +109,17 @@ firing for about 2 s after the stimulus; shorter trials overlap.
 | `worker`   | Celery + PyNEST 3.8 + CerebNEST      | none                         |
 | `db`       | MySQL 8.4                            | 3307 (localhost only)        |
 | `redis`    | Redis 7 (queue and task state)       | 6380 (localhost only)        |
-| `minio`    | MinIO (plots, metrics, spike files)  | 9050, console 9051           |
+
+Plots, metrics, spike files and uploaded stimuli are plain files in the Docker volume
+`musin_storage`, mounted at `/data` in both `api` and `worker`. The browser downloads
+them from the API through signed links that expire after one hour.
 
 ```
 backend/            FastAPI app
-  api/routers/      auth, networks, simulations, stimuli
+  api/routers/      auth, networks, simulations, stimuli, files (signed downloads)
   core/             settings, database session, security, NEST model catalogue
   migrations/       Alembic revisions, applied at startup
-  services/         MinIO client, experiment rules, stimulus file parser
+  services/         file storage, experiment rules, stimulus file parser
   tests/
 worker/
   tasks.py          Celery task: picks the experiment, tracks status and abort
@@ -130,7 +127,7 @@ worker/
                     cerebellum_conditioning, decision_making
   analysis.py       spike analysis (numpy only)
   nest_utils.py     shared NEST helpers
-  results.py        writes artefacts to MinIO and graphs.zip
+  results.py        writes artefacts to the storage and to graphs.zip
   tests/
 frontend/           Angular app
 infrastructure/     engine Dockerfile, nginx config
@@ -179,7 +176,7 @@ Backend and worker code is mounted into the containers; restart them after a cha
 docker compose restart api worker
 ```
 
-Tests (no NEST, MySQL, Redis or MinIO needed):
+Tests (no NEST, MySQL or Redis needed):
 
 ```bash
 pip install -r backend/requirements.txt -r backend/requirements-dev.txt
@@ -206,13 +203,14 @@ is not a local machine:
 
 - set `ENVIRONMENT` to something other than `development` and generate `SECRET_KEY`
   with `openssl rand -hex 32` (the API refuses to start with the example key);
-- choose real passwords for MySQL, MinIO and the first user;
-- set `MINIO_EXTERNAL_URL` to the host and port the **browser** uses to reach MinIO,
-  otherwise plots do not load;
+- choose real passwords for MySQL and the first user;
 - put the stack behind HTTPS. There is no login rate limiting.
 
 ## Known limits
 
+- Versions before October 2026 kept results in MinIO. They are not moved automatically:
+  after upgrading, older simulations show no plots until their files are copied into
+  the `musin_storage` volume under the same paths (`results/<user>/sim_<id>/…`).
 - The CerebNEST EGLIF models are listed in the editor but were not validated here.
   `eglif_dcnp` in particular fires one spike per input spike on receptor 2, whatever
   the weight, so it cannot be inhibited through that port. Networks saved with EGLIF

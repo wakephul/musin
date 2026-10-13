@@ -97,10 +97,10 @@ def make_windows(n_trials: int, trial_ms: float, stim_ms: float, iti_range, rng,
     return windows, cursor
 
 
-def run_cerebellum_msi_race(task, sim_info, exp_params, minio_service, progress_cb):
+def run_cerebellum_msi_race(task, sim_info, exp_params, storage, progress_cb):
     import nest
 
-    store = ResultStore(minio_service, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
+    store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
     seed = int(exp_params.get("seed", 2016))
     resolution = float(exp_params.get("resolution", 0.1))
     rng = np.random.default_rng(seed)

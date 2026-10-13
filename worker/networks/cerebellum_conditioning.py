@@ -295,7 +295,7 @@ def _add_io(nest, net, global_trial_idx, side_a):
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 
-def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, progress_cb):
+def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress_cb):
     """
     Full cerebellar conditioning: training + test.
     Called from worker/tasks.py when builtin == 'cerebellum_conditioning'.
@@ -503,7 +503,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
     progress_cb(88, "Grafici")
     colors = {'auditory': '#f4a261', 'visual': '#457b9d', 'audiovisual': '#2a9d8f'}
 
-    store = ResultStore(minio_service, base_path)
+    store = ResultStore(storage, base_path)
 
     def _upload(fig, name):
         store.put_figure(name, fig, dpi=120)

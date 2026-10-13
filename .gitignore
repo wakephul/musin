@@ -37,7 +37,6 @@ auth.log
 
 # --- Database / storage volumes (if ever bind-mounted locally) ---
 data/mysql/
-data/minio/
 *.sqlite3
 
 # --- OS / editor cruft ---

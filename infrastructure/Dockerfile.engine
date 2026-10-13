@@ -64,7 +64,8 @@ COPY backend backend
 COPY worker worker
 COPY pytest.ini conftest.py ./
 
-RUN useradd --create-home --uid 1000 musin
+# /data è la cartella dei risultati: il volume montato lì eredita questo proprietario.
+RUN useradd --create-home --uid 1000 musin && mkdir -p /data && chown musin:musin /data
 USER musin
 
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

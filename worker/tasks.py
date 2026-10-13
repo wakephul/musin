@@ -8,14 +8,14 @@ from sqlalchemy import select
 from backend.core.db import SessionLocal
 from backend.models import Network, Simulation, SimulationStatus, Stimulus
 from backend.services.experiments import experiment_kind
-from backend.services.minio_client import minio_service
+from backend.services.storage import storage
 from worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 ABORT_CHECK_INTERVAL_S = 2.0
 
-# Ogni esperimento espone run(task, sim_info, exp_params, minio_service, progress_cb).
+# Ogni esperimento espone run(task, sim_info, exp_params, storage, progress_cb).
 EXPERIMENTS = {
     "decision_making": ("worker.networks.decision_making", "run_decision_making_experiment"),
     "cerebellum_conditioning": ("worker.networks.cerebellum_conditioning", "run_cerebellum_conditioning"),
@@ -69,7 +69,7 @@ def run_simulation_task(self: Task, simulation_id: int) -> dict:
             stimulus = db.query(Stimulus).filter(Stimulus.id == stimulus_id, Stimulus.owner_id == owner_id).first()
             if not stimulus or not stimulus.file_path:
                 raise ValueError(f"Stimolo {stimulus_id} non trovato")
-            return minio_service.get_json_object(stimulus.file_path)["spike_trains"]
+            return storage.read_json(stimulus.file_path)["spike_trains"]
 
         sim_info = {
             "owner_id": owner_id,
@@ -81,17 +81,17 @@ def run_simulation_task(self: Task, simulation_id: int) -> dict:
         try:
             module_name, function_name = EXPERIMENTS[experiment_kind(exp_params)]
             run_experiment = getattr(importlib.import_module(module_name), function_name)
-            run_experiment(self, sim_info, exp_params, minio_service, progress)
+            run_experiment(self, sim_info, exp_params, storage, progress)
             if _is_aborted(simulation_id):
                 raise SimulationAborted()
         except SimulationAborted:
-            minio_service.delete_directory(base_path)
+            storage.delete_tree(base_path)
             logger.info("Simulazione %s interrotta.", simulation_id)
             return {"status": "ABORTED"}
         except Exception as exc:
             logger.exception("Simulazione %s fallita", simulation_id)
             db.rollback()
-            minio_service.delete_directory(base_path)
+            storage.delete_tree(base_path)
             if not _is_aborted(simulation_id):
                 simulation.status = SimulationStatus.FAILED
                 simulation.error_message = f"{type(exc).__name__}: {exc}"[:2000]

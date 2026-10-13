@@ -51,7 +51,7 @@ def test_fork_copies_the_definition_and_remembers_the_parent(client, auth, netwo
     assert noted["description"] == "prova con pesi diversi"
 
 
-def test_delete_removes_the_network_and_its_simulations(client, auth, network, minio):
+def test_delete_removes_the_network_and_its_simulations(client, auth, network):
     launched = client.post("/api/v1/simulations/launch", data={"network_id": network["id"], "params": '{"phases": {"test_duration_ms": 100}}'}, headers=auth)
     simulation_id = launched.json()["simulation_id"]
     assert client.delete(f"{API}/{network['id']}", headers=auth).status_code == 204

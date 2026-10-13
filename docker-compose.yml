@@ -5,7 +5,7 @@ services:
       - .env
     volumes:
       - musin_db_data:/var/lib/mysql
-    # Database, Redis e console MinIO sono raggiungibili solo da questa macchina.
+    # Database, Redis e API sono raggiungibili solo da questa macchina.
     ports:
       - "127.0.0.1:3307:3306"
     restart: unless-stopped
@@ -27,27 +27,6 @@ services:
       timeout: 5s
       retries: 5
 
-  minio:
-    # RELEASE.2025-09-07T16-13-09Z, fissata per digest: MinIO non pubblica più l'immagine
-    # su Docker Hub, quindi si usa solo se è già in cache e mai una con contenuto diverso.
-    # Altrove va indicata in MINIO_IMAGE una build di cui ci si fida, anch'essa per digest.
-    image: ${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}
-    env_file:
-      - .env
-    command: server /data --console-address ":9001"
-    # La porta 9050 serve al browser per scaricare grafici e risultati (URL firmati).
-    ports:
-      - "9050:9000"
-      - "127.0.0.1:9051:9001"
-    volumes:
-      - musin_minio_data:/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-
   api: &engine
     build:
       context: .
@@ -55,20 +34,17 @@ services:
     command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
     env_file:
       - .env
-    environment:
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
     volumes:
       - ./backend:/app/backend
       - ./worker:/app/worker
+      # Risultati delle simulazioni e stimoli: il worker scrive, l'API legge.
+      - musin_storage:/data
     ports:
       - "127.0.0.1:8010:8000"
     depends_on:
       db:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
     restart: unless-stopped
 
@@ -100,4 +76,4 @@ services:
 
 volumes:
   musin_db_data:
-  musin_minio_data:
+  musin_storage:

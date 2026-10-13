@@ -1,32 +1,23 @@
+import shutil
+
 import pytest
 
 from backend.core.db import SessionLocal
 from backend.core.migrations import upgrade_database
 from backend.core.security import get_password_hash
 from backend.models import Network, Simulation, SimulationStatus, User
+from backend.services.storage import storage
 from worker import tasks
 from worker.results import ResultStore
 
 
-class FakeMinio:
-    def __init__(self):
-        self.objects = {}
-
-    def upload_file(self, stream, size, object_name, content_type="application/octet-stream"):
-        self.objects[object_name] = stream.read()
-
-    def delete_directory(self, prefix):
-        for name in [name for name in self.objects if name.startswith(prefix.rstrip("/") + "/")]:
-            del self.objects[name]
-
-
 @pytest.fixture
-def minio(monkeypatch):
-    fake = FakeMinio()
-    monkeypatch.setattr(tasks, "minio_service", fake)
+def files(monkeypatch):
+    """Lo storage vero su cartella temporanea; il task non parla con Redis."""
+    shutil.rmtree(storage.root, ignore_errors=True)
     monkeypatch.setattr(tasks.run_simulation_task, "update_state", lambda **kwargs: None)
     monkeypatch.setattr(tasks, "ABORT_CHECK_INTERVAL_S", 0.0)
-    return fake
+    return storage
 
 
 @pytest.fixture
@@ -59,10 +50,10 @@ def read(simulation_id):
         return simulation.status, simulation.results_path, simulation.error_message
 
 
-def test_completed_simulation_stores_the_results_path(monkeypatch, minio, simulation_id):
-    def writes_results(task, sim_info, exp_params, minio_service, progress):
+def test_completed_simulation_stores_the_results_path(monkeypatch, files, simulation_id):
+    def writes_results(task, sim_info, exp_params, storage, progress):
         progress(50, "metà")
-        store = ResultStore(minio_service, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
+        store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
         store.put_json("spikes.json", {"spikes": {}})
         store.close()
 
@@ -70,12 +61,12 @@ def test_completed_simulation_stores_the_results_path(monkeypatch, minio, simula
     assert tasks.run_simulation_task.run(simulation_id) == {"status": "COMPLETED"}
     status, results_path, error = read(simulation_id)
     assert status == SimulationStatus.COMPLETED and error is None
-    assert sorted(name.removeprefix(results_path + "/") for name in minio.objects) == ["graphs.zip", "spikes.json"]
+    assert files.list(results_path) == [f"{results_path}/graphs.zip", f"{results_path}/spikes.json"]
 
 
-def test_failure_is_recorded_with_its_reason_and_partial_results_are_removed(monkeypatch, minio, simulation_id):
-    def fails(task, sim_info, exp_params, minio_service, progress):
-        minio_service.upload_file(__import__("io").BytesIO(b"x"), 1, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}/partial.png")
+def test_failure_is_recorded_with_its_reason_and_partial_results_are_removed(monkeypatch, files, simulation_id):
+    def fails(task, sim_info, exp_params, storage, progress):
+        storage.write(f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}/partial.png", b"x")
         raise ValueError("popolazione inesistente: XYZ")
 
     use_experiment(monkeypatch, fails)
@@ -83,13 +74,13 @@ def test_failure_is_recorded_with_its_reason_and_partial_results_are_removed(mon
     status, results_path, error = read(simulation_id)
     assert status == SimulationStatus.FAILED and results_path is None
     assert error == "ValueError: popolazione inesistente: XYZ"
-    assert minio.objects == {}
+    assert files.list("results") == []
 
 
-def test_abort_during_the_run_stops_at_the_next_progress_update(monkeypatch, minio, simulation_id):
+def test_abort_during_the_run_stops_at_the_next_progress_update(monkeypatch, files, simulation_id):
     steps = []
 
-    def aborted_midway(task, sim_info, exp_params, minio_service, progress):
+    def aborted_midway(task, sim_info, exp_params, storage, progress):
         progress(10, "primo passo")
         steps.append("first")
         with SessionLocal() as db:
@@ -104,8 +95,8 @@ def test_abort_during_the_run_stops_at_the_next_progress_update(monkeypatch, min
     assert read(simulation_id)[0] == SimulationStatus.ABORTED
 
 
-def test_a_simulation_aborted_while_queued_never_runs(monkeypatch, minio, simulation_id):
-    def must_not_run(task, sim_info, exp_params, minio_service, progress):
+def test_a_simulation_aborted_while_queued_never_runs(monkeypatch, files, simulation_id):
+    def must_not_run(task, sim_info, exp_params, storage, progress):
         raise AssertionError("l'esperimento non doveva partire")
 
     use_experiment(monkeypatch, must_not_run)

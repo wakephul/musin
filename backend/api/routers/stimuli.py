@@ -7,7 +7,7 @@ from backend.api.deps import CurrentUser, SessionDep
 from backend.core.config import settings
 from backend.models import Stimulus
 from backend.schemas import StimulusResponse
-from backend.services.minio_client import minio_service
+from backend.services.storage import storage
 from backend.services.stimulus_files import StimulusFormatError, parse_stimulus_file, summarize
 
 router = APIRouter(prefix="/stimuli", tags=["Stimuli"])
@@ -44,7 +44,7 @@ def upload_stimulus(
         raise HTTPException(422, str(exc)) from exc
 
     object_name = f"stimuli/{current_user.id}/{uuid.uuid4()}.json"
-    minio_service.upload_json(object_name, {"spike_trains": trains})
+    storage.write_json(object_name, {"spike_trains": trains})
 
     stimulus = Stimulus(
         name=name,
@@ -68,6 +68,6 @@ def read_stimulus(db: SessionDep, current_user: CurrentUser, stimulus_id: int) -
 def delete_stimulus(db: SessionDep, current_user: CurrentUser, stimulus_id: int) -> None:
     stimulus = _get_owned_stimulus(db, stimulus_id, current_user.id)
     if stimulus.file_path:
-        minio_service.delete_object(stimulus.file_path)
+        storage.delete(stimulus.file_path)
     db.delete(stimulus)
     db.commit()
