@@ -30,6 +30,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
+from worker.analysis import cf_gated_ltd
 from worker.results import ResultStore
 
 # ── Fixed protocol constants (from network_config.json) ─────────────────────
@@ -211,6 +212,8 @@ def _build_network(nest, par):
         PA_aud=PA_aud, PA_vis=PA_vis, PB_aud=PB_aud, PB_vis=PB_vis,
         sr_DCN_a=sr_DCN_a, sr_DCN_b=sr_DCN_b, sr_PC=sr_PC, sr_IO=sr_IO, sr_GR=sr_GR,
         pfpc_conns=pfpc_conns,
+        pfpc_sources=np.asarray(pfpc_conns.get('source')),
+        pfpc_to_side_a=np.isin(np.asarray(pfpc_conns.get('target')), pc_ids[:pc_half]),
         io_a_ids=set(io_ids[:io_half]),
         io_b_ids=set(io_ids[io_half:]),
         pc_a_ids=set(pc_ids[:pc_half]),
@@ -256,29 +259,11 @@ def _apply_ltd_step(nest, net, trial_t0, par):
     if not active_grs:
         return
 
-    # Read all PF-PC weights at once
     pfpc = net['pfpc_conns']
-    sources = np.asarray(nest.GetStatus(pfpc, 'source'), dtype=int)
-    targets = np.asarray(nest.GetStatus(pfpc, 'target'), dtype=int)
     weights = np.asarray(nest.GetStatus(pfpc, 'weight'), dtype=float)
-
-    pc_a_ids = net['pc_a_ids']
-    pc_b_ids = net['pc_b_ids']
-
-    new_weights = weights.copy()
-    for j in range(len(sources)):
-        src = sources[j]
-        tgt = targets[j]
-        w   = weights[j]
-        in_active = src in active_grs
-        # CF-gated LTD
-        if in_active and ((tgt in pc_a_ids and cf_a) or (tgt in pc_b_ids and cf_b)):
-            new_weights[j] = max(W_MIN, w - LTD_RATE)
-        else:
-            # Slow recovery toward Init_PFPC
-            new_weights[j] = min(W_MAX, w + LTP_RATE)
-
-    nest.SetStatus(pfpc, 'weight', new_weights.tolist())
+    cf_on_target = (net['pfpc_to_side_a'] & cf_a) | (~net['pfpc_to_side_a'] & cf_b)
+    depress = np.isin(net['pfpc_sources'], list(active_grs)) & cf_on_target
+    nest.SetStatus(pfpc, 'weight', cf_gated_ltd(weights, depress, LTD_RATE, LTP_RATE, W_MIN, W_MAX).tolist())
 
 
 def _add_stim(nest, net, global_trial_idx, channel_keys):
@@ -367,7 +352,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
     test_sequence  = [{'condition': c, 'side': 'A' if s else 'B'} for (c, s) in test_specs]
 
     # ── NEST kernel ──────────────────────────────────────────────
-    progress_cb(3, "Initializing NEST kernel")
+    progress_cb(3, "Avvio del kernel NEST")
     nest.ResetKernel()
     nest.SetKernelStatus({
         'resolution': 0.1,
@@ -376,7 +361,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
     })
 
     # ── Build network ────────────────────────────────────────────
-    progress_cb(8, "Building cerebellar microcircuit")
+    progress_cb(8, "Costruzione del microcircuito")
     net = _build_network(nest, par)
 
     train_time         = n_train * TRIAL_MS          # 60 000 ms
@@ -384,7 +369,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
     total_time         = train_time + test_time_per_type * 3
 
     # ── Training phase: trial-by-trial to allow weight updates ───
-    progress_cb(12, "Training phase: plasticity ON (CF-gated LTD)")
+    progress_cb(12, "Addestramento")
     for t, (side_a, mod) in enumerate(train_specs):
         if mod == 'auditory':
             ch_keys = ['PA_aud'] if side_a else ['PB_aud']
@@ -398,12 +383,12 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
         _apply_ltd_step(nest, net, t * TRIAL_MS, par)
 
         pct = 12 + int(38 * (t + 1) / n_train)
-        progress_cb(pct, f"Training trial {t+1}/{n_train} ({'A' if side_a else 'B'} {mod})")
+        progress_cb(pct, f"Addestramento {t+1}/{n_train}")
         gc.collect()
 
     # ── Test stimuli (plasticity frozen — no weight updates) ─────
     # Conditions and sides are interleaved (see test_specs) to avoid block artefacts.
-    progress_cb(52, "Wiring test stimuli (plasticity OFF, randomized order)")
+    progress_cb(52, "Preparazione degli stimoli di test")
     for k, (cond, side_a) in enumerate(test_specs):
         g = n_train + k
         if cond == 'auditory':
@@ -415,7 +400,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
         _add_stim(nest, net, g, ch_keys)
 
     # ── Simulate test phase in chunks ────────────────────────────
-    progress_cb(54, "Simulating test phase (plasticity OFF)")
+    progress_cb(54, "Test")
     chunk    = 5000.0
     simmed   = 0.0
     test_total = test_time_per_type * 3
@@ -424,11 +409,11 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
         nest.Simulate(step)
         simmed += step
         pct = 54 + int(32 * simmed / test_total)
-        progress_cb(pct, f"Test: {int(simmed/1000)}/{int(test_total/1000)} s")
+        progress_cb(pct, f"Test: {int(simmed/1000)} di {int(test_total/1000)} s")
         gc.collect()
 
     # ── Extract spikes ───────────────────────────────────────────
-    progress_cb(87, "Analysing spikes")
+    progress_cb(87, "Analisi")
 
     def _get(sr):
         ev = sr.get('events')
@@ -500,7 +485,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
         n_missed      = sum(1 for r in cond_tr if r['winner'] == 'none')
         outcomes[lbl] = {'correct': n_correct, 'wrong_side': len(cond_tr) - n_correct - n_missed,
                          'no_response': n_missed, 'trials': len(cond_tr)}
-        accuracy[lbl] = 100.0 * n_correct / max(len(cond_tr), 1)
+        accuracy[lbl] = round(100.0 * n_correct / max(len(cond_tr), 1), 1)
         valid_rts     = [r for r in rt_by_cond[lbl] if not np.isnan(r)]
         median_rt[lbl] = float(np.median(valid_rts)) if valid_rts else None
 
@@ -514,7 +499,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
     }
 
     # ── Plots ────────────────────────────────────────────────────
-    progress_cb(88, "Generating plots")
+    progress_cb(88, "Grafici")
     colors = {'auditory': '#f4a261', 'visual': '#457b9d', 'audiovisual': '#2a9d8f'}
 
     store = ResultStore(minio_service, base_path)
@@ -580,7 +565,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
         for ax_ in axes:
             ax_.axvspan(x0, x0 + STIM_MS / 1000.0, alpha=0.12, color=colors[cond])
     fig.tight_layout()
-    _upload(fig, 'exp_cond_raster.png')
+    _upload(fig, 'exp_cond_dcn_test.png')
 
     # 4. Trial outcomes by condition
     fig, ax = plt.subplots(figsize=(6, 4))
@@ -633,7 +618,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
     # These match the population ids in the network definition (GR, PC, IO,
     # DCN_A, DCN_B), so the generic "Raster Plots & PSTH per Popolazione"
     # section in the UI renders them via {pop_id}_raster.png / {pop_id}_histogram.png.
-    progress_cb(92, "Generating per-population raster + PSTH")
+    progress_cb(92, "Grafici per popolazione")
     pop_specs = [
         ('GR',    snd_gr, t_gr, par['GR_num']),
         ('PC',    snd_pc, t_pc, PC_n),
@@ -671,7 +656,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
         _upload(fig, f'{pop_id}_histogram.png')
 
     # ── Metrics JSON ─────────────────────────────────────────────
-    progress_cb(96, "Saving metrics JSON")
+    progress_cb(96, "Salvataggio delle metriche")
 
     metrics = {
         'experiment': 'cerebellar_conditioning',
@@ -704,6 +689,6 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
     }, in_zip=False)
     store.close()
 
-    progress_cb(100, "Cerebellar conditioning complete")
+    progress_cb(100, "Completata")
     gc.collect()
     return metrics
