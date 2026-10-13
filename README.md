@@ -34,6 +34,9 @@ The first build compiles NEST and CerebNEST from source and takes about ten minu
 | Web app          | http://localhost:3000      |
 | API docs         | http://localhost:8010/docs |
 
+Both answer on this machine only. To reach the web app from other machines set
+`MUSIN_BIND=0.0.0.0` in `.env` (see [Configuration](#configuration) first).
+
 Sign in with `FIRST_SUPERUSER_EMAIL` / `FIRST_SUPERUSER_PASSWORD` from your `.env`,
 or create an account from the sign-in page (`ALLOW_REGISTRATION=false` turns that off).
 
@@ -44,7 +47,8 @@ or create an account from the sign-in page (`ALLOW_REGISTRATION=false` turns tha
    is inhibitory. _Parti da un modello_ loads the cerebellar microcircuit used by the
    multisensory experiment.
 2. **Launch a simulation** from the network row (_Simula_). Three modes:
-   - **Esperimento predefinito**: one of the three experiments described below.
+   - **Esperimento predefinito**: one of the three experiments described below. Two of
+     them are the models compared in the paper.
    - **Protocollo a trial**: your network, stimulus devices switched on per trial
      according to a pool of conditions, with decision accuracy, response-time CDFs
      and an optional Race Model Inequality.
@@ -57,9 +61,24 @@ or create an account from the sign-in page (`ALLOW_REGISTRATION=false` turns tha
 
 ## The experiments
 
-All three use `iaf_cond_exp` neurons with the parameters of the original NEST 2.18
-model, so populations are silent without input and a reaction time can be read as a
-firing-rate threshold crossing.
+The two cerebellar experiments use `iaf_cond_exp` neurons with the parameters of the
+original NEST 2.18 model, so populations are silent without input and a reaction time
+can be read as a firing-rate threshold crossing. The decision network uses
+`iaf_psc_exp_multisynapse` with noise, AMPA, NMDA and GABA receptors.
+
+| Paper (Fig. 9)                                    | Experiment here                               |
+| ------------------------------------------------- | --------------------------------------------- |
+| Control model: cerebellar network                 | `cerebellum_conditioning`                     |
+| Acerebellar model: two cortical networks, a race  | `decision_making` with `modality: "dual"`     |
+
+`cerebellum_msi_race` is not in the paper: it asks the same question (does the
+audiovisual response beat the race model?) on a network drawn in the editor.
+
+Every experiment with unimodal and audiovisual trials reports the Race Model Inequality
+`F_AV(t) ≤ F_V(t) + F_A(t)` over all trials, so missed trials count. The largest
+violation alone means little with few trials, so it comes with a p-value: a bootstrap
+of the least favourable case in which the inequality still holds. Facilitation is
+reported when p < 0.05, and not tested with fewer than 10 trials per condition.
 
 ### Audiovisual multisensory integration — `cerebellum_msi_race`
 
@@ -78,27 +97,67 @@ and `DCN_B` (the microcircuit template has them).
   180 ms, visual 220 ms.
 - **Readout.** Reaction time is the first moment a DCN population exceeds its
   pre-stimulus baseline by `threshold_delta_hz`. Reported: hits, misses, false alarms
-  and correct rejections; reaction-time CDFs per condition; the Race Model Inequality
-  `F_AV(t) ≤ F_V(t) + F_A(t)`, computed over all trials so missed trials count.
+  and correct rejections; reaction-time CDFs per condition; the Race Model Inequality.
 
 With the default parameters the median reaction time is about 245 ms for AV against
 about 310 ms for either single modality, and the inequality is violated.
 
 ### Associative conditioning — `cerebellum_conditioning`
 
-Builds its **own network** (2000 GR, 100 PC, 100 IO, 50 DCN on two sides A/B); the
-selected network is not simulated. Training pairs an auditory or visual stimulus on
-one side with the teaching signal of that side and applies the same
-climbing-fibre-gated LTD. The test presents auditory, visual and audiovisual trials
-and reports, per condition, how often the DCN of the stimulated side wins, how often
-the other side wins, and how often nothing responds.
+The control model of the paper. Builds its **own network** (2000 GR, 100 PC, 100 IO,
+50 DCN on two sides A/B); the selected network is not simulated. Training pairs an
+auditory or visual stimulus on one side with the teaching signal of that side and
+applies the same climbing-fibre-gated LTD. The test presents auditory, visual and
+audiovisual trials (latencies 150 and 220 ms, as in the original configuration) and
+reports, per condition, how often the DCN of the stimulated side wins, how often the
+other side wins, and how often nothing responds.
+
+The response time is the first moment the two DCN rates differ by 15 Hz (5 ms bins,
+5-bin running mean). The audiovisual responses are compared with the race model, the
+faster of the auditory and visual response of each trial pair, at the percentiles 5
+to 95 used in Fig. 9.
 
 ### Audiovisual decision — `decision_making`
 
-Builds its **own network**: a two-population attractor (Wang) with a shared
-inhibitory pool. Each trial stimulates one side; the response is the first population
-whose rate rises above threshold. Trials are 3 s long because the attractor keeps
-firing for about 2 s after the stimulus; shorter trials overlap.
+The acerebellar model of the paper. Builds its **own network**: a two-population
+attractor (Wang) with a shared inhibitory pool. Each trial stimulates one side; the
+response is the first population whose rate rises above threshold. Trials are 3 s
+long because the attractor keeps firing for up to a second after the stimulus.
+
+With `modality: "dual"` (the default) two independent networks run, one per modality,
+on the same trial sequence; the audiovisual response is the faster of the two, so
+nothing is integrated and the inequality cannot be violated. `auditory`, `visual` and
+`audiovisual` run a single network. The background noise rate is drawn once per
+simulation, as in the original model, and the network sits close to threshold: the
+median response time moves by tens of milliseconds from one seed to the next.
+
+### How close this is to the paper
+
+Median response times in ms, default parameters, three seeds pooled; in brackets the
+95 % bootstrap interval. The paper column is the response times behind Fig. 9, read
+from the notebooks of the original analysis.
+
+| Cerebellar network (135 trials per condition) | Here            | Paper (541) |
+| --------------------------------------------- | --------------- | ----------- |
+| Auditory                                      | 328 (305 – 372) | 320         |
+| Visual                                        | 390 (355 – 415) | 370         |
+| Audiovisual                                   | 245 (240 – 245) | 245         |
+| Race model                                    | 322 (308 – 340) | 305         |
+
+Audiovisual responses are faster than the race model at 10 of the 10 percentiles (8 of
+10 in the paper data) and the inequality is violated in every run (p < 0.001).
+
+| Two cortical networks (120 trials) | Here            | Paper (40) |
+| ---------------------------------- | --------------- | ---------- |
+| Auditory                           | 240 (218 – 260) | 290        |
+| Visual                             | 320 (310 – 342) | 335        |
+| Audiovisual = race                 | 230 (218 – 255) | 275        |
+
+The cortical auditory network answers earlier here than in the paper's single set of
+40 trials. Its median depends on the noise draw: 228 to 265 ms across the three seeds,
+and about 20 ms more in a fourth run with a lower background rate (0.9 instead of
+4.4 Hz). The paper's 290 ms sits at the upper edge of that range. The qualitative
+result holds in every run: no violation without the cerebellum, a violation with it.
 
 ## Architecture
 
@@ -187,7 +246,8 @@ pytest
 cd frontend && npm test                # logic of the editor, launch form and results page
 ```
 
-Backend tests can also run inside the image:
+Backend tests can also run inside the image, where NEST is installed and
+`worker/tests/test_nest_smoke.py` runs each experiment once at a small size:
 
 ```bash
 docker compose run --rm api sh -c "pip install -q -r backend/requirements-dev.txt && python -m pytest -p no:cacheprovider"
@@ -201,10 +261,16 @@ it is applied when the API starts.
 Everything is in `.env`; `.env.example` documents each variable. For anything that
 is not a local machine:
 
-- set `ENVIRONMENT` to something other than `development` and generate `SECRET_KEY`
-  with `openssl rand -hex 32` (the API refuses to start with the example key);
+- set `ENVIRONMENT` to something other than `development`: the API then refuses to
+  start with the example password for the first user;
 - choose real passwords for MySQL and the first user;
-- put the stack behind HTTPS. There is no login rate limiting.
+- set `MUSIN_BIND=0.0.0.0` only behind HTTPS. There is no login rate limiting.
+
+`SECRET_KEY` can stay empty: a key is generated at the first start and kept in the
+data volume (`/data/.secret_key`), so sessions and download links survive restarts.
+
+The simulator uses `WORKER_CPUS` threads (default 6) and at most `WORKER_MEMORY`
+(default 20G). Lower both on a smaller machine.
 
 ## Known limits
 
@@ -213,12 +279,19 @@ is not a local machine:
   the `musin_storage` volume under the same paths (`results/<user>/sim_<id>/…`).
 - The CerebNEST EGLIF models are listed in the editor but were not validated here.
   `eglif_dcnp` in particular fires one spike per input spike on receptor 2, whatever
-  the weight, so it cannot be inhibited through that port. Networks saved with EGLIF
-  models are converted to `iaf_cond_exp` when run through the multisensory experiment.
+  the weight, so it cannot be inhibited through that port. In the multisensory
+  experiment the Purkinje, DCN and inferior-olive EGLIF models are replaced
+  (`iaf_cond_exp`, `parrot_neuron`); the granule and interneuron models are not.
 - `stdp_synapse_sinexp` needs the CerebNEST volume transmitter, which does not exist
   for NEST 3.8; cerebellar plasticity is therefore applied between trials by the
   experiments themselves and is not available in generic networks.
-- Spike recording is capped at the first 250 neurons of each population.
+- Spike recording is capped at the first 250 neurons of each population in user
+  networks and in the multisensory experiment. Conditioning records every DCN and
+  Purkinje cell; the decision network records every neuron (`rec_pop` lowers that).
+- A simulation runs on the network as it was when launched. Simulations launched before
+  this was stored (October 2026) read the network's current definition.
+- If the simulator restarts while a simulation is running, the simulation is closed as
+  failed; it is not resumed.
 
 ## Citation
 

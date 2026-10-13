@@ -74,7 +74,7 @@ MODEL_CATALOGUE = {
         {
             "id": SENSORY_STIMULUS,
             "label": "Stimolo sensoriale (Poisson)",
-            "description": "Treni di Poisson indipendenti, attivi solo nei trial in cui il device è nel pool.",
+            "description": "Treni di Poisson indipendenti, attivi solo nei trial la cui condizione include il dispositivo.",
             "default_params": {"rate": 20.0, "n_sources": 20},
         },
         {
