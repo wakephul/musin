@@ -110,7 +110,8 @@ auditory or visual stimulus on one side with the teaching signal of that side an
 applies the same climbing-fibre-gated LTD. The test presents auditory, visual and
 audiovisual trials (latencies 150 and 220 ms, as in the original configuration) and
 reports, per condition, how often the DCN of the stimulated side wins, how often the
-other side wins, and how often nothing responds.
+other side wins, and how often nothing responds. The defaults are 15 training trials,
+the 45 s of the original protocol, and 30 test trials per condition.
 
 The response time is the first moment the two DCN rates differ by 15 Hz (5 ms bins,
 5-bin running mean). The audiovisual responses are compared with the race model, the
@@ -133,9 +134,11 @@ median response time moves by tens of milliseconds from one seed to the next.
 
 ### How close this is to the paper
 
-Median response times in ms, default parameters, three seeds pooled; in brackets the
-95 % bootstrap interval. The paper column is the response times behind Fig. 9, read
-from the notebooks of the original analysis.
+Median response times in ms, three seeds pooled; in brackets the 95 % bootstrap
+interval. Parameters are the defaults except the number of trials: 45 test trials per
+condition for the cerebellar network, 40 trials for the cortical ones. The paper
+column is the response times behind Fig. 9, read from the notebooks of the original
+analysis.
 
 | Cerebellar network (135 trials per condition) | Here            | Paper (541) |
 | --------------------------------------------- | --------------- | ----------- |
@@ -218,8 +221,42 @@ TOKEN=$(curl -s -X POST http://localhost:3000/api/v1/auth/login \
   -d "username=$EMAIL" -d "password=$PASSWORD" | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
 curl -s -X POST http://localhost:3000/api/v1/simulations/launch \
   -H "Authorization: Bearer $TOKEN" \
-  -F network_id=1 -F 'params={"builtin": "cerebellum_conditioning", "n_train": 20, "n_test": 20}'
+  -F network_id=1 -F 'params={"builtin": "cerebellum_conditioning", "n_train": 15, "n_test": 45, "seed": 11}'
 ```
+
+`params` is what the launch form sends. `builtin` selects a predefined experiment;
+without it, `protocol` makes a trial protocol and `phases` a continuous simulation.
+A trial protocol needs at least one condition in `stimuli_pool`, and each condition
+may only name devices listed in `inputs`:
+
+```json
+{
+  "seed": 5,
+  "protocol": {
+    "num_trials": 45, "trial_duration_ms": 600, "stimulus_duration_ms": 300, "iti_ms": 200,
+    "stimuli_pool": [
+      {"devices": ["VIS"], "weight": 1, "condition_label": "V"},
+      {"devices": ["AUD"], "weight": 1, "condition_label": "A"},
+      {"devices": ["VIS", "AUD"], "weight": 1, "condition_label": "AV"}
+    ]
+  },
+  "inputs": {
+    "devices": [
+      {"id": "VIS", "model": "poisson_generator", "params": {"rate": 600.0}},
+      {"id": "AUD", "model": "poisson_generator", "params": {"rate": 600.0}}
+    ],
+    "connections": [
+      {"source": "VIS", "target": "GR", "rule": "all_to_all", "params": {"weight": 1.0, "delay": 1.0}},
+      {"source": "AUD", "target": "GR", "rule": "all_to_all", "params": {"weight": 1.0, "delay": 1.0}}
+    ]
+  },
+  "analysis": {"race_model": {"enabled": true, "populations": ["GR"]}}
+}
+```
+
+The Race Model Inequality of a trial protocol reads the conditions labelled `V`, `A`
+and `AV`. Parameters that are negative, not finite or beyond the size limits are
+refused with a 422 and the reason.
 
 ## Development
 
@@ -290,6 +327,8 @@ The simulator uses `WORKER_CPUS` threads (default 6) and at most `WORKER_MEMORY`
   Purkinje cell; the decision network records every neuron (`rec_pop` lowers that).
 - A simulation runs on the network as it was when launched. Simulations launched before
   this was stored (October 2026) read the network's current definition.
+- Results computed before the p-value was added show the Race Model Inequality with
+  the old criterion (largest violation above 0.05), without a p-value.
 - If the simulator restarts while a simulation is running, the simulation is closed as
   failed; it is not resumed.
 
