@@ -1,12 +1,16 @@
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Annotated, Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 from backend.core.nest_models import CONNECTION_RULES
 from backend.models import SimulationStatus
 
 MAX_POPULATION_SIZE = 1_000_000
+
+# Il database salva le date in UTC senza fuso: vanno dichiarate UTC in uscita,
+# altrimenti il browser le legge come ora locale.
+UtcDatetime = Annotated[datetime, AfterValidator(lambda value: value if value.tzinfo else value.replace(tzinfo=timezone.utc))]
 
 
 # --- Utenti e autenticazione ---
@@ -15,7 +19,7 @@ class UserResponse(BaseModel):
     id: int
     email: EmailStr
     is_active: bool
-    created_at: datetime
+    created_at: UtcDatetime
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -110,8 +114,8 @@ class NetworkResponse(BaseModel):
     definition: Dict[str, Any]
     parent_id: Optional[int] = None
     owner_id: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -125,7 +129,7 @@ class StimulusResponse(BaseModel):
     # {n_trains, n_spikes, duration_ms, source_filename}
     definition: Optional[Dict[str, Any]] = None
     owner_id: int
-    created_at: datetime
+    created_at: UtcDatetime
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -144,8 +148,8 @@ class SimulationResponse(BaseModel):
     duration_ms: float
     experiment_params: Dict[str, Any] = Field(default_factory=dict)
     error_message: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 class SimulationPage(BaseModel):

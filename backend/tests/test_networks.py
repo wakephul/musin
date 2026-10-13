@@ -61,3 +61,7 @@ def test_model_catalogue_lists_the_reference_models(client, auth):
     neuron_ids = {neuron["id"] for module in catalogue["modules"] for neuron in module["neurons"]}
     assert {"iaf_cond_exp", "parrot_neuron"} <= neuron_ids
     assert {device["id"] for device in catalogue["stimulus_devices"]} >= {"legacy_sensory_stimulus", "spike_train_stimulus"}
+
+
+def test_dates_are_returned_as_utc(network):
+    assert network["created_at"].endswith(("Z", "+00:00"))
