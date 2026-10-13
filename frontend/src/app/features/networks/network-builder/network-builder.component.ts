@@ -1,783 +1,384 @@
-import { Component, inject, signal, OnInit, DestroyRef } from '@angular/core';
-import { CommonModule } from '@angular/common';
-import {
-  ReactiveFormsModule,
-  FormBuilder,
-  FormArray,
-  Validators,
-} from '@angular/forms';
-import { Router, ActivatedRoute } from '@angular/router';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
+import { ReactiveFormsModule } from '@angular/forms';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { EMPTY, Observable, catchError, debounceTime, map, of, switchMap, tap, throwError } from 'rxjs';
 
-import {
-  NetworkService,
-  NetworkModule,
-} from '../../../core/services/network.service';
-import { CytoscapeViewerComponent } from '../../../shared/components/cytoscape-viewer/cytoscape-viewer/cytoscape-viewer.component';
-import { NETWORK_PRESETS, NetworkPreset } from '../../../core/data/presets';
+import { NETWORK_PRESETS, NetworkPreset, presetToPayload } from '../../../core/data/network-presets';
+import { ModelInfo, Network, NetworkPayload } from '../../../core/models';
+import { NetworkService } from '../../../core/services/network.service';
+import { apiErrorMessage } from '../../../core/utils/errors';
 import { countNeurons, countSynapses } from '../../../core/utils/topology';
+import { CytoscapeViewerComponent } from '../../../shared/components/cytoscape-viewer/cytoscape-viewer.component';
+import { fillForm, networkForm, populationGroup, projectionGroup } from './network-form.controls';
+import { NetworkFormValue, splitParams, toDraft, toFormValue, toPayload, validate } from './network-form.mapping';
+import { PopulationRowComponent } from './population-row.component';
+import { ProjectionRowComponent } from './projection-row.component';
+
+const EMPTY_FORM: NetworkFormValue = { name: '', description: '', populations: [], projections: [] };
+const integer = new Intl.NumberFormat('it-IT');
 
 @Component({
   selector: 'app-network-builder',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule, CytoscapeViewerComponent],
+  imports: [ReactiveFormsModule, RouterLink, CytoscapeViewerComponent, PopulationRowComponent, ProjectionRowComponent],
   template: `
-    <div class="flex h-[calc(100vh-4rem)] bg-slate-50 overflow-hidden">
-      <aside
-        class="w-[450px] min-w-[450px] bg-white border-r border-slate-200 shadow-xl overflow-y-auto p-6 custom-scrollbar flex flex-col z-20"
-      >
-        <header class="mb-6 flex-shrink-0">
-          <h1 class="text-2xl font-bold text-slate-800 tracking-tight">
-            {{ editingId() ? 'Dettaglio / Modifica Rete' : 'Network Builder' }}
-          </h1>
-          <p class="text-slate-500 text-sm">
-            {{ editingId() ? 'Modifica la rete o salvala come copia (fork)' : 'Definizione Strutturale e Biologica' }}
-          </p>
-        </header>
+    <div class="page">
+      <p class="breadcrumb"><a routerLink="/dashboard">Panoramica</a> / {{ network() ? 'Rete' : 'Nuova rete' }}</p>
 
-        @if (isLoadingModels()) {
-          <div class="flex justify-center py-10">
-            <svg
-              class="animate-spin h-8 w-8 text-blue-500"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle
-                class="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                stroke-width="4"
-              ></circle>
-              <path
-                class="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-              ></path>
-            </svg>
-          </div>
-        } @else {
-          <form
-            [formGroup]="networkForm"
-            class="space-y-6 flex-1 flex flex-col"
-          >
-            <div class="space-y-6 flex-1">
-              <!-- TEMPLATES: one-click validated networks -->
-              <section
-                class="bg-gradient-to-br from-blue-50 to-indigo-50 p-4 rounded-xl border border-blue-100"
-              >
-                <div class="flex items-center gap-2 mb-3">
-                  <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                  </svg>
-                  <h2 class="text-xs font-bold text-blue-700 uppercase tracking-widest">
-                    Start from a Template
-                  </h2>
-                </div>
-                <div class="space-y-2">
-                  @for (preset of networkPresets; track preset.key) {
-                    <button type="button" (click)="loadNetworkPreset(preset)"
-                      class="w-full text-left bg-white border border-blue-200 rounded-lg p-3 hover:border-blue-400 hover:shadow-sm transition-all group">
-                      <div class="flex items-center justify-between">
-                        <span class="text-sm font-bold text-slate-800 group-hover:text-blue-700">{{ preset.name }}</span>
-                        <span class="text-[10px] font-bold text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">Load →</span>
-                      </div>
-                      <p class="text-[11px] text-slate-500 mt-0.5">{{ preset.tagline }}</p>
-                    </button>
+      @if (loadError(); as message) {
+        <p class="notice notice-error" role="alert">{{ message }} <a routerLink="/dashboard">Torna alla panoramica</a></p>
+      } @else if (loading() || catalogue() === undefined) {
+        <p class="empty">Caricamento…</p>
+      } @else {
+        <form [formGroup]="form" (ngSubmit)="save()">
+          <header class="page-header">
+            <div class="min-w-0">
+              <h1 class="page-title">{{ network()?.name ?? 'Nuova rete' }}</h1>
+              <p class="page-subtitle">{{ summary() }}</p>
+            </div>
+            <div class="flex flex-col items-end gap-1">
+              <div class="flex flex-wrap items-center justify-end gap-2">
+                @if (network(); as saved) {
+                  @if (!dirty()) {
+                    <a class="btn" [routerLink]="['/simulations/run', saved.id]">Simula questa rete</a>
                   }
-                </div>
-                <p class="text-[10px] text-slate-400 mt-2 italic">
-                  Loads a validated circuit you can inspect and edit below before saving.
-                </p>
-              </section>
-
-              <section
-                class="bg-slate-50 p-4 rounded-xl border border-slate-100"
-              >
-                <h2
-                  class="text-xs font-bold text-blue-600 uppercase tracking-widest mb-4"
-                >
-                  1. Dati Generali
-                </h2>
-                <div class="space-y-3">
-                  <input
-                    type="text"
-                    formControlName="name"
-                    placeholder="Nome della Rete"
-                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
-                  />
-                  <textarea
-                    formControlName="description"
-                    placeholder="Descrizione clinica..."
-                    class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none h-16 resize-none text-sm"
-                  ></textarea>
-                </div>
-              </section>
-
-              <section
-                class="bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-inner"
-              >
-                <h2
-                  class="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-2"
-                >
-                  2. Costanti Biologiche (JSON)
-                </h2>
-                <textarea
-                  formControlName="biological_params"
-                  spellcheck="false"
-                  class="w-full px-3 py-3 bg-slate-800 border border-slate-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none h-24 resize-y text-xs text-green-400 font-mono custom-scrollbar"
-                ></textarea>
-                @if (jsonError()) {
-                  <p class="text-red-400 text-[10px] mt-2 font-bold">
-                    {{ jsonError() }}
-                  </p>
+                  <button type="button" class="btn" [disabled]="!!problems().first || saving()" (click)="save(true)">
+                    Salva come copia
+                  </button>
                 }
+                <button
+                  type="submit"
+                  class="btn btn-primary"
+                  [disabled]="!!problems().first || saving()"
+                  [attr.aria-describedby]="problems().first ? 'save-problem' : null"
+                >
+                  {{ saving() ? 'Salvataggio…' : 'Salva rete' }}
+                </button>
+              </div>
+              @if (problems().first; as problem) {
+                <p id="save-problem" class="text-right text-xs text-muted">{{ problem }}</p>
+              }
+            </div>
+          </header>
+
+          @if (error(); as message) {
+            <p class="notice notice-error mb-4" role="alert">{{ message }}</p>
+          }
+          @if (notice(); as message) {
+            <p class="notice notice-ok mb-4" role="status">{{ message }}</p>
+          }
+          @if (catalogue() === null) {
+            <p class="notice notice-error mb-4" role="alert">
+              Elenco dei modelli non caricato: restano selezionabili solo i modelli già salvati. Ricarica la pagina per riprovare.
+            </p>
+          }
+
+          <div class="grid gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:items-start">
+            <div class="space-y-5">
+              <section class="panel">
+                <div class="panel-header"><h2 class="section-title">Parti da un modello</h2></div>
+                <ul>
+                  @for (preset of presets; track preset.key) {
+                    <li class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-line px-4 py-3 last:border-b-0">
+                      <div class="min-w-0 flex-1 basis-64">
+                        <p class="font-medium">{{ preset.name }}</p>
+                        <p class="help">{{ preset.description }}</p>
+                      </div>
+                      @if (presetToConfirm() === preset.key) {
+                        <div class="flex flex-col items-end gap-1" role="alert">
+                          <p class="text-xs text-muted">Sostituisce le popolazioni e le proiezioni attuali.</p>
+                          <div class="flex gap-2">
+                            <button type="button" class="btn btn-danger btn-sm" (click)="usePreset(preset, true)">
+                              Conferma sostituzione
+                            </button>
+                            <button type="button" class="btn btn-quiet btn-sm" (click)="presetToConfirm.set(null)">Annulla</button>
+                          </div>
+                        </div>
+                      } @else {
+                        <button type="button" class="btn btn-sm" (click)="usePreset(preset)">Usa questo modello</button>
+                      }
+                    </li>
+                  }
+                </ul>
               </section>
 
-              <section>
-                <div class="flex justify-between items-center mb-4">
-                  <h2
-                    class="text-xs font-bold text-slate-500 uppercase tracking-widest"
-                  >
-                    3. Popolazioni Biologiche
-                  </h2>
-                  <button
-                    (click)="addPopulation()"
-                    type="button"
-                    class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-700 font-semibold"
-                  >
-                    + Aggiungi
-                  </button>
-                </div>
-                <div formArrayName="populations" class="space-y-3">
-                  @for (pop of populations.controls; track $index) {
-                    <div
-                      [formGroupName]="$index"
-                      class="p-3 bg-white border border-slate-200 rounded-xl shadow-sm relative group"
-                    >
-                      <button
-                        (click)="removePopulation($index)"
-                        class="absolute -top-2 -right-2 bg-red-100 text-red-600 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold opacity-0 group-hover:opacity-100 z-10"
-                      >
-                        ✕
-                      </button>
-                      <div class="grid grid-cols-2 gap-3 mb-3">
-                        <div>
-                          <label
-                            class="block text-[10px] font-bold text-slate-400 uppercase mb-1"
-                            >ID Univoco</label
-                          >
-                          <input
-                            type="text"
-                            formControlName="id"
-                            placeholder="GR"
-                            class="w-full text-xs p-2 border rounded font-mono uppercase focus:ring-1 focus:ring-blue-500 outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label
-                            class="block text-[10px] font-bold text-slate-400 uppercase mb-1"
-                            >Size</label
-                          >
-                          <input
-                            type="number"
-                            formControlName="size"
-                            placeholder="200"
-                            class="w-full text-xs p-2 border rounded focus:ring-1 focus:ring-blue-500 outline-none"
-                          />
-                        </div>
-                        <div class="col-span-2">
-                          <label
-                            class="block text-[10px] font-bold text-slate-400 uppercase mb-1"
-                            >Modello Neuronale</label
-                          >
-                          <select
-                            formControlName="neuron_model"
-                            (change)="onNeuronModelChange($index)"
-                            class="w-full text-xs p-2 border rounded focus:ring-1 focus:ring-blue-500 outline-none bg-white font-medium"
-                          >
-                            <option value="" disabled>
-                              Seleziona un modello...
-                            </option>
-                            @if (isUnlistedNeuronModel(pop.get('neuron_model')?.value)) {
-                              <option [value]="pop.get('neuron_model')?.value">
-                                {{ pop.get('neuron_model')?.value }} (non in elenco)
-                              </option>
-                            }
-                            @for (mod of availableModules(); track mod.id) {
-                              <optgroup [label]="mod.label">
-                                @for (n of mod.neurons; track n.id) {
-                                  <option [value]="n.id">
-                                    {{ n.label }} ({{ n.id }})
-                                  </option>
-                                }
-                              </optgroup>
-                            }
-                          </select>
-                        </div>
-
-                        @if (pop.get('neuron_model')?.value) {
-                          <div class="col-span-2 mt-1">
-                            <label
-                              class="block text-[10px] font-bold text-blue-400 uppercase mb-1 flex justify-between"
-                            >
-                              Parametri (JSON)
-                            </label>
-                            <textarea
-                              formControlName="params"
-                              spellcheck="false"
-                              class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none h-24 resize-y text-xs text-green-400 font-mono custom-scrollbar"
-                              placeholder="{ ... }"
-                            ></textarea>
-                          </div>
-                        }
-                      </div>
-                    </div>
-                  }
+              <section class="panel">
+                <div class="panel-header"><h2 class="section-title">Dati generali</h2></div>
+                <div class="panel-body space-y-3">
+                  <div>
+                    <label class="label" for="network-name">Nome</label>
+                    <input
+                      id="network-name"
+                      type="text"
+                      class="input"
+                      [class.border-danger]="nameProblem()"
+                      formControlName="name"
+                      [attr.maxlength]="255"
+                      autocomplete="off"
+                    />
+                    @if (nameProblem()) {
+                      <p class="field-error" role="alert">{{ problems().name }}</p>
+                    }
+                  </div>
+                  <div>
+                    <label class="label" for="network-description">Descrizione</label>
+                    <textarea id="network-description" class="input" rows="2" formControlName="description"></textarea>
+                  </div>
                 </div>
               </section>
 
-              <section>
-                <div class="flex justify-between items-center mb-4">
-                  <h2
-                    class="text-xs font-bold text-slate-500 uppercase tracking-widest"
-                  >
-                    4. Proiezioni Biologiche
-                  </h2>
-                  <button
-                    (click)="addProjection()"
-                    type="button"
-                    class="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md hover:bg-indigo-700 font-semibold"
-                  >
-                    + Connetti
-                  </button>
+              <section class="panel">
+                <div class="panel-header"><h2 class="section-title">Popolazioni</h2></div>
+                @for (group of form.controls.populations.controls; track group; let i = $index) {
+                  <app-population-row
+                    class="border-b border-line"
+                    [group]="group"
+                    [index]="i"
+                    [modules]="modules()"
+                    [problems]="problems().populations[i]"
+                    (remove)="removePopulation(i)"
+                  />
+                } @empty {
+                  <p class="empty border-b border-line">Nessuna popolazione: aggiungine una o parti da un modello.</p>
+                }
+                <div class="px-4 py-3">
+                  <button type="button" class="btn btn-sm" (click)="addPopulation()">Aggiungi popolazione</button>
                 </div>
-                <div formArrayName="projections" class="space-y-3">
-                  @for (proj of projections.controls; track $index) {
-                    <div
-                      [formGroupName]="$index"
-                      class="p-3 bg-indigo-50/30 border border-slate-200 rounded-xl shadow-sm relative group"
-                    >
-                      <button
-                        (click)="removeProjection($index)"
-                        class="absolute -top-2 -right-2 bg-red-100 text-red-600 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold opacity-0 group-hover:opacity-100 z-10"
-                      >
-                        ✕
-                      </button>
-                      <div class="grid grid-cols-2 gap-2 mb-2">
-                        <div>
-                          <label
-                            class="block text-[9px] font-bold text-slate-400 uppercase mb-1"
-                            >Sorgente</label
-                          >
-                          <select
-                            formControlName="source"
-                            class="w-full text-xs p-1.5 border rounded font-mono uppercase bg-white"
-                          >
-                            <option value="" disabled>Seleziona</option>
-                            @for (p of populations.value; track p.id) {
-                              @if (p.id) {
-                                <option [value]="p.id">{{ p.id }}</option>
-                              }
-                            }
-                          </select>
-                        </div>
-                        <div>
-                          <label
-                            class="block text-[9px] font-bold text-slate-400 uppercase mb-1"
-                            >Target</label
-                          >
-                          <select
-                            formControlName="target"
-                            class="w-full text-xs p-1.5 border rounded font-mono uppercase bg-white"
-                          >
-                            <option value="" disabled>Seleziona</option>
-                            @for (p of populations.value; track p.id) {
-                              @if (p.id) {
-                                <option [value]="p.id">{{ p.id }}</option>
-                              }
-                            }
-                          </select>
-                        </div>
-                        <div class="col-span-2">
-                          <label
-                            class="block text-[9px] font-bold text-slate-400 uppercase mb-1"
-                            >Regola NEST</label
-                          >
-                          <select
-                            formControlName="rule"
-                            class="w-full text-xs p-1.5 border rounded bg-white"
-                          >
-                            <option value="all_to_all">all_to_all</option>
-                            <option value="one_to_one">one_to_one</option>
-                            <option value="fixed_indegree">
-                              fixed_indegree
-                            </option>
-                            <option value="fixed_outdegree">
-                              fixed_outdegree
-                            </option>
-                          </select>
-                        </div>
+              </section>
 
-                        @if (proj.get('rule')?.value === 'fixed_indegree') {
-                          <div class="col-span-2">
-                            <label
-                              class="block text-[9px] font-bold text-slate-400 uppercase mb-1"
-                              >Indegree (n. connessioni)</label
-                            >
-                            <input
-                              type="number"
-                              formControlName="indegree"
-                              class="w-full text-xs p-1.5 border rounded focus:ring-1 focus:ring-indigo-500 outline-none"
-                            />
-                          </div>
-                        }
-                        @if (proj.get('rule')?.value === 'fixed_outdegree') {
-                          <div class="col-span-2">
-                            <label
-                              class="block text-[9px] font-bold text-slate-400 uppercase mb-1"
-                              >Outdegree (n. connessioni)</label
-                            >
-                            <input
-                              type="number"
-                              formControlName="outdegree"
-                              class="w-full text-xs p-1.5 border rounded focus:ring-1 focus:ring-indigo-500 outline-none"
-                            />
-                          </div>
-                        }
-
-                        <div class="col-span-2 mt-1">
-                          <label
-                            class="block text-[9px] font-bold text-slate-400 uppercase mb-1"
-                            >Modello Sinapsi</label
-                          >
-                          <select
-                            formControlName="synapse_model"
-                            (change)="onSynapseModelChange($index)"
-                            class="w-full text-xs p-1.5 border rounded bg-white font-medium"
-                          >
-                            <option value="" disabled>
-                              Seleziona una sinapsi...
-                            </option>
-                            @for (mod of availableModules(); track mod.id) {
-                              <optgroup [label]="mod.label">
-                                @for (s of mod.synapses; track s.id) {
-                                  <option [value]="s.id">
-                                    {{ s.label }} ({{ s.id }})
-                                  </option>
-                                }
-                              </optgroup>
-                            }
-                          </select>
-                        </div>
-
-                        @if (proj.get('synapse_model')?.value) {
-                          <div class="col-span-2 mt-1">
-                            <label
-                              class="block text-[10px] font-bold text-indigo-400 uppercase mb-1 flex justify-between"
-                            >
-                              Parametri Sinapsi (JSON)
-                            </label>
-                            <textarea
-                              formControlName="params"
-                              spellcheck="false"
-                              class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none h-24 resize-y text-xs text-green-400 font-mono custom-scrollbar"
-                              placeholder="{ ... }"
-                            ></textarea>
-                          </div>
-                        }
-                      </div>
-                    </div>
-                  }
+              <section class="panel">
+                <div class="panel-header"><h2 class="section-title">Proiezioni</h2></div>
+                @for (group of form.controls.projections.controls; track group; let i = $index) {
+                  <app-projection-row
+                    class="border-b border-line"
+                    [group]="group"
+                    [index]="i"
+                    [populations]="value().populations"
+                    [synapses]="synapses()"
+                    [problems]="problems().projections[i]"
+                    (remove)="form.controls.projections.removeAt(i)"
+                  />
+                } @empty {
+                  <p class="empty border-b border-line">Nessuna proiezione: le popolazioni non sono collegate tra loro.</p>
+                }
+                <div class="px-4 py-3">
+                  <button type="button" class="btn btn-sm" (click)="addProjection()">Aggiungi proiezione</button>
                 </div>
               </section>
             </div>
 
-            <button
-              (click)="submitNetwork()"
-              [disabled]="networkForm.invalid || isSaving()"
-              class="w-full mt-6 bg-emerald-600 text-white font-bold py-3.5 rounded-xl hover:bg-emerald-700 disabled:opacity-50 shadow-lg"
-            >
-              {{
-                isSaving() ? 'Salvataggio in corso...'
-                  : editingId() ? 'SALVA MODIFICHE' : 'SALVA STRUTTURA RETE'
-              }}
-            </button>
-            @if (editingId()) {
-              <button
-                (click)="saveAsCopyAndSubmit()"
-                [disabled]="networkForm.invalid || isSaving()"
-                class="w-full mt-3 bg-white border-2 border-blue-500 text-blue-700 font-bold py-3 rounded-xl hover:bg-blue-50 disabled:opacity-50"
-              >
-                SALVA COME COPIA (FORK)
-              </button>
-            }
-          </form>
-        }
-      </aside>
-
-      <main class="flex-1 relative bg-slate-200/50 p-6 z-10">
-        <div
-          class="h-full w-full bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden relative"
-        >
-          <app-cytoscape-viewer [elements]="graphElements()" />
-        </div>
-      </main>
+            <section class="panel order-first lg:sticky lg:top-4 lg:order-none">
+              <div class="panel-header"><h2 class="section-title">Grafo</h2></div>
+              <app-cytoscape-viewer [populations]="draft().populations" [projections]="draft().projections" />
+            </section>
+          </div>
+        </form>
+      }
     </div>
   `,
 })
-export class NetworkBuilderComponent implements OnInit {
-  private fb = inject(FormBuilder);
-  private networkService = inject(NetworkService);
+export class NetworkBuilderComponent {
+  private networks = inject(NetworkService);
   private router = inject(Router);
-  private route = inject(ActivatedRoute);
-  private destroyRef = inject(DestroyRef);
 
-  isLoadingModels = signal(true);
-  availableModules = signal<NetworkModule[]>([]);
-  isSaving = signal(false);
-  // When set, the builder is editing an existing network (route networks/:id);
-  // otherwise it is creating a new one (networks/new). "Salva come copia" always
-  // creates a new network (fork) from the current form state.
-  editingId = signal<string | null>(null);
-  saveAsCopy = false;
-  graphElements = signal<any[]>([]);
-  jsonError = signal<string | null>(null);
+  protected readonly presets = NETWORK_PRESETS;
+  protected form = networkForm();
 
-  readonly networkPresets = NETWORK_PRESETS;
-
-  defaultBioJson = `{\n  "LTP1": 0.001,\n  "LTD1": 0.02,\n  "Init_PFPC": 4.0\n}`;
-
-  networkForm = this.fb.group({
-    name: ['', [Validators.required, Validators.minLength(3)]],
-    description: [''],
-    biological_params: [this.defaultBioJson],
-    populations: this.fb.array([]),
-    projections: this.fb.array([]),
+  /** `undefined` durante il caricamento, `null` se il catalogo non è arrivato. */
+  protected catalogue = toSignal(this.networks.getModels().pipe(catchError(() => of(null))));
+  protected modules = computed(() => this.catalogue()?.modules ?? []);
+  protected synapses = computed(() => {
+    const byId = new Map<string, ModelInfo>();
+    for (const synapse of this.modules().flatMap((module) => module.synapses)) {
+      if (!byId.has(synapse.id)) byId.set(synapse.id, synapse);
+    }
+    return [...byId.values()];
   });
 
-  get populations() {
-    return this.networkForm.get('populations') as FormArray;
-  }
-  get projections() {
-    return this.networkForm.get('projections') as FormArray;
-  }
+  /** La rete salvata che si sta modificando; `null` per una rete nuova. */
+  protected network = signal<Network | null>(null);
+  protected loading = signal(true);
+  protected loadError = signal<string | null>(null);
+  protected saving = signal(false);
+  protected error = signal<string | null>(null);
+  protected notice = signal<string | null>(null);
+  protected dirty = signal(false);
+  protected presetToConfirm = signal<string | null>(null);
 
-  ngOnInit() {
-    const id = this.route.snapshot.paramMap.get('id');
-    if (id && id !== 'new') this.editingId.set(id);
+  protected value = signal<NetworkFormValue>(EMPTY_FORM);
+  protected problems = computed(() => validate(this.value()));
+  /** Ciò che mostrano grafo e riepilogo: segue il form con un ritardo, per non ridisegnare a ogni tasto. */
+  protected draft = signal(toDraft(EMPTY_FORM));
+  protected summary = computed(() => {
+    const { populations, projections } = this.draft();
+    const neurons = countNeurons(populations);
+    return [
+      `${populations.length} ${populations.length === 1 ? 'popolazione' : 'popolazioni'}`,
+      `${integer.format(neurons)} ${neurons === 1 ? 'neurone' : 'neuroni'}`,
+      `${integer.format(countSynapses(populations, projections))} sinapsi stimate`,
+    ].join(' · ');
+  });
 
-    this.networkService.getModels().subscribe({
-      next: (modules) => {
-        this.availableModules.set(modules);
-        this.isLoadingModels.set(false);
-        if (this.editingId()) {
-          this.loadExistingNetwork(this.editingId()!);
-        } else if (this.populations.length === 0) {
-          this.addPopulation();
-        }
-      },
-      error: () => {
-        this.jsonError.set('Impossibile caricare i modelli da NEST. Verifica che il backend sia attivo.');
-        this.isLoadingModels.set(false);
-      },
+  private nextKey = 0;
+  private destroyed = false;
+
+  constructor() {
+    inject(DestroyRef).onDestroy(() => (this.destroyed = true));
+
+    this.form.valueChanges.pipe(takeUntilDestroyed()).subscribe(() => {
+      this.value.set(this.form.getRawValue());
+      this.dirty.set(true);
+      this.notice.set(null);
     });
+    this.form.valueChanges
+      .pipe(debounceTime(250), takeUntilDestroyed())
+      .subscribe(() => this.draft.set(toDraft(this.form.getRawValue())));
 
-    this.networkForm.valueChanges
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe((val) => this.updateGraph(val));
-  }
-
-  /** Load an existing saved network into the form (edit / fork). */
-  private loadExistingNetwork(id: string) {
-    this.networkService.getNetworkById(id).subscribe({
-      next: (net: any) => {
-        const def = net.definition ?? {};
-        const topo = def.topology ?? {};
-        const asStr = (p: any) => (typeof p === 'string' ? p : JSON.stringify(p ?? {}, null, 2));
-        this.populations.clear();
-        this.projections.clear();
-        this.networkForm.patchValue({
-          name: net.name ?? '',
-          description: net.description ?? '',
-          biological_params: asStr(def.params ?? {}),
-        });
-        (topo.populations ?? []).forEach((pop: any) => {
-          this.populations.push(this.fb.group({
-            id: [pop.id, Validators.required],
-            size: [pop.size, [Validators.required, Validators.min(1)]],
-            neuron_model: [pop.neuron_model, Validators.required],
-            params: [asStr(pop.params)],
-          }));
-        });
-        (topo.projections ?? []).forEach((proj: any) => {
-          // indegree/outdegree sono salvati dentro params: li spostiamo nei campi
-          // dedicati, così c'è un solo punto in cui modificarli.
-          const { indegree, outdegree, ...params } = proj.params ?? {};
-          this.projections.push(this.fb.group({
-            source: [proj.source, Validators.required],
-            target: [proj.target, Validators.required],
-            rule: [proj.rule, Validators.required],
-            indegree: [indegree ?? 100],
-            outdegree: [outdegree ?? 100],
-            synapse_model: [proj.synapse_model ?? 'static_synapse', Validators.required],
-            params: [asStr(params)],
-          }));
-        });
-        if (this.populations.length === 0) this.addPopulation();
-        this.updateGraph(this.networkForm.value);
-      },
-      error: () => this.jsonError.set('Impossibile caricare la rete richiesta.'),
-    });
-  }
-
-  /** One-click load of a validated network template into the builder form. */
-  loadNetworkPreset(preset: NetworkPreset) {
-    this.populations.clear();
-    this.projections.clear();
-
-    this.networkForm.patchValue({
-      name: preset.name,
-      description: preset.description,
-      biological_params: preset.biological_params,
-    });
-
-    preset.populations.forEach((pop) => {
-      this.populations.push(
-        this.fb.group({
-          id: [pop.id, Validators.required],
-          size: [pop.size, [Validators.required, Validators.min(1)]],
-          neuron_model: [pop.neuron_model, Validators.required],
-          params: [pop.params],
+    inject(ActivatedRoute)
+      .paramMap.pipe(
+        // Il messaggio di conferma viaggia nello stato della navigazione, leggibile solo mentre è in corso.
+        map((params) => ({ id: params.get('id'), notice: this.navigationNotice() })),
+        tap(() => {
+          this.loading.set(true);
+          this.loadError.set(null);
+          this.error.set(null);
         }),
-      );
-    });
-
-    preset.projections.forEach((proj) => {
-      this.projections.push(
-        this.fb.group({
-          source: [proj.source, Validators.required],
-          target: [proj.target, Validators.required],
-          rule: [proj.rule, Validators.required],
-          indegree: [proj.indegree ?? 100],
-          outdegree: [proj.outdegree ?? 100],
-          synapse_model: [proj.synapse_model, Validators.required],
-          params: [proj.params],
-        }),
-      );
-    });
-  }
-
-  addPopulation() {
-    this.populations.push(
-      this.fb.group({
-        id: ['', Validators.required],
-        size: [100, [Validators.required, Validators.min(1)]],
-        neuron_model: ['', Validators.required],
-        params: ['{\n  \n}'], // Stringa JSON grezza per il textarea
-      }),
-    );
-  }
-  removePopulation(index: number) {
-    this.populations.removeAt(index);
-  }
-
-  addProjection() {
-    this.projections.push(
-      this.fb.group({
-        source: ['', Validators.required],
-        target: ['', Validators.required],
-        rule: ['all_to_all', Validators.required],
-        indegree: [100],
-        outdegree: [100],
-        synapse_model: ['', Validators.required],
-        params: ['{\n  \n}'], // Stringa JSON grezza per il textarea
-      }),
-    );
-  }
-  removeProjection(index: number) {
-    this.projections.removeAt(index);
-  }
-
-  isUnlistedNeuronModel(modelId: string | null | undefined): boolean {
-    if (!modelId) return false;
-    return !this.availableModules().some((m) => m.neurons.some((n: any) => n.id === modelId));
-  }
-
-  onNeuronModelChange(index: number) {
-    const selectedModelId = this.populations
-      .at(index)
-      .get('neuron_model')?.value;
-    const model = this.availableModules()
-      .flatMap((m) => m.neurons)
-      .find((n) => n.id === selectedModelId);
-
-    // Autocompila il textarea con i parametri di default come JSON bello formattato
-    if (
-      model &&
-      model.default_params &&
-      Object.keys(model.default_params).length > 0
-    ) {
-      this.populations
-        .at(index)
-        .get('params')
-        ?.setValue(JSON.stringify(model.default_params, null, 2));
-    } else {
-      this.populations.at(index).get('params')?.setValue('{\n  \n}');
-    }
-  }
-
-  onSynapseModelChange(index: number) {
-    const selectedModelId = this.projections
-      .at(index)
-      .get('synapse_model')?.value;
-    const model = this.availableModules()
-      .flatMap((m) => m.synapses)
-      .find((s) => s.id === selectedModelId);
-
-    if (
-      model &&
-      model.default_params &&
-      Object.keys(model.default_params).length > 0
-    ) {
-      this.projections
-        .at(index)
-        .get('params')
-        ?.setValue(JSON.stringify(model.default_params, null, 2));
-    } else {
-      this.projections.at(index).get('params')?.setValue('{\n  \n}');
-    }
-  }
-
-  private updateGraph(val: any) {
-    const nodes = (val.populations || [])
-      .filter((p: any) => p.id)
-      .map((p: any) => ({
-        data: {
-          id: p.id,
-          label: `${p.id}\nN=${p.size}`,
-          size: Number(p.size) || 100,
-        },
-      }));
-    const edges = (val.projections || [])
-      .filter((pr: any) => pr.source && pr.target)
-      .map((pr: any, i: number) => ({
-        data: {
-          id: `edge_${i}`,
-          source: pr.source,
-          target: pr.target,
-          label: `[${pr.rule}]\n${pr.synapse_model || '?'}`,
-        },
-      }));
-    this.graphElements.set([...nodes, ...edges]);
-  }
-
-  private parseAdvancedParams(itemsArray: any[], context: string) {
-    return itemsArray.map((item) => {
-      const p = { ...item };
-
-      // Valida e trasforma la stringa testuale in un Oggetto JSON reale
-      if (typeof p.params === 'string' && p.params.trim() !== '') {
-        try {
-          p.params = JSON.parse(p.params);
-        } catch (e: any) {
-          throw new Error(
-            `Syntax Error nel JSON di ${context} (${p.id || p.source || 'Sconosciuto'}): ${e.message}`,
+        switchMap(({ id, notice }) => {
+          const network: Observable<Network | null> = id ? this.networks.getNetwork(id) : of(null);
+          return network.pipe(
+            map((loaded) => ({ network: loaded, notice })),
+            catchError((err) => {
+              this.loadError.set(apiErrorMessage(err, 'Rete non caricata.'));
+              return EMPTY;
+            }),
           );
-        }
-      } else {
-        p.params = {};
-      }
-
-      // Il backend e il worker leggono indegree/outdegree da params.
-      delete p.params.indegree;
-      delete p.params.outdegree;
-      if (p.rule === 'fixed_indegree') p.params.indegree = Number(p.indegree);
-      if (p.rule === 'fixed_outdegree') p.params.outdegree = Number(p.outdegree);
-      delete p.indegree;
-      delete p.outdegree;
-
-      return p;
-    });
+        }),
+        takeUntilDestroyed(),
+      )
+      .subscribe(({ network, notice }) => this.show(network, notice));
   }
 
-  submitNetwork() {
-    // Capture & clear the fork flag first so an early validation return can't
-    // leave it stuck for the next save.
-    const asCopy = this.saveAsCopy;
-    this.saveAsCopy = false;
-    if (this.networkForm.invalid) return;
-    this.jsonError.set(null);
-    this.isSaving.set(true);
+  protected nameProblem(): boolean {
+    return this.form.controls.name.touched && !!this.problems().name;
+  }
 
-    const formVal = this.networkForm.value;
-    let parsedBioParams = {};
+  protected addPopulation(): void {
+    this.form.controls.populations.push(
+      populationGroup({ key: this.nextKey++, id: '', size: 100, neuron_model: '', params: '{}' }),
+    );
+  }
 
-    if (formVal.biological_params && formVal.biological_params.trim() !== '') {
-      try {
-        parsedBioParams = JSON.parse(formVal.biological_params);
-      } catch (e: any) {
-        this.jsonError.set(`Errore nelle Costanti Biologiche: ${e.message}`);
-        this.isSaving.set(false);
-        return;
-      }
+  protected removePopulation(index: number): void {
+    const { populations, projections } = this.form.controls;
+    const key = populations.at(index).controls.key.value;
+    for (const { controls } of projections.controls) {
+      if (controls.source.value === key) controls.source.setValue(null, { emitEvent: false });
+      if (controls.target.value === key) controls.target.setValue(null, { emitEvent: false });
     }
+    populations.removeAt(index);
+  }
 
-    let parsedPopulations = [];
-    let parsedProjections = [];
+  protected addProjection(): void {
+    const synapse = this.synapses().find((model) => model.id === 'static_synapse');
+    this.form.controls.projections.push(
+      projectionGroup({
+        source: null,
+        target: null,
+        rule: 'all_to_all',
+        synapse_model: synapse?.id ?? '',
+        ...splitParams('all_to_all', synapse?.default_params ?? {}),
+      }),
+    );
+  }
 
-    // Catturiamo gli errori di sintassi nei box testuali tramite il Try-Catch del nostro parser
-    try {
-      parsedPopulations = this.parseAdvancedParams(
-        formVal.populations || [],
-        'una Popolazione',
-      );
-      parsedProjections = this.parseAdvancedParams(
-        formVal.projections || [],
-        'una Proiezione',
-      );
-    } catch (e: any) {
-      this.jsonError.set(e.message);
-      this.isSaving.set(false);
+  protected usePreset(preset: NetworkPreset, confirmed = false): void {
+    if (this.form.controls.populations.length && !confirmed) {
+      this.presetToConfirm.set(preset.key);
       return;
     }
+    this.presetToConfirm.set(null);
+    const fromPreset = toFormValue(presetToPayload(preset));
+    const { name, description } = this.form.getRawValue();
+    // Nome e descrizione già scritti restano: il modello riempie solo quelli vuoti.
+    this.replaceForm({
+      ...fromPreset,
+      name: name.trim() ? name : fromPreset.name,
+      description: description.trim() ? description : fromPreset.description,
+    });
+  }
 
-    const editId = this.editingId();
+  protected save(asCopy = false): void {
+    if (this.problems().first || this.saving()) return;
+    const current = this.network();
+    const payload = toPayload(this.form.getRawValue(), current?.definition?.params ?? {});
+    const request = !current
+      ? this.networks.createNetwork(payload)
+      : asCopy
+        ? this.saveCopy(current, payload)
+        : this.networks.updateNetwork(current.id, payload);
 
-    const payload = {
-      name: asCopy ? `${formVal.name ?? 'Rete Biologica'} (copia)` : (formVal.name ?? 'Rete Biologica'),
-      description: formVal.description ?? '',
-      nodes_count: countNeurons(parsedPopulations),
-      edges_count: countSynapses(parsedPopulations, parsedProjections),
-      params: parsedBioParams,
-      topology: {
-        populations: parsedPopulations,
-        projections: parsedProjections,
-      },
-    };
-
-    // Edit in place (PUT) only when editing AND not forking; otherwise create new.
-    const request$ = (editId && !asCopy)
-      ? this.networkService.updateNetwork(editId, payload)
-      : this.networkService.createNetwork(payload);
-
-    request$.subscribe({
-      next: () => {
-        this.isSaving.set(false);
-        this.router.navigate(['/dashboard']);
+    this.saving.set(true);
+    this.error.set(null);
+    this.notice.set(null);
+    request.subscribe({
+      next: (saved) => {
+        this.saving.set(false);
+        if (saved.id === current?.id) {
+          this.network.set(saved);
+          this.dirty.set(false);
+          this.notice.set('Rete salvata.');
+        } else if (!this.destroyed) {
+          this.router.navigate(['/networks', saved.id], {
+            replaceUrl: !current,
+            state: { notice: asCopy ? 'Copia salvata.' : 'Rete salvata.' },
+          });
+        }
       },
       error: (err) => {
-        this.isSaving.set(false);
-        this.jsonError.set(`Errore del Server: ${err.message || 'salvataggio non riuscito'}`);
+        this.saving.set(false);
+        this.error.set(apiErrorMessage(err, 'Rete non salvata.'));
       },
     });
   }
 
-  /** "Salva come copia" — fork the current form state into a NEW network. */
-  saveAsCopyAndSubmit() {
-    this.saveAsCopy = true;
-    this.submitNetwork();
+  /** La copia nasce sul server con `forkNetwork`, che ne registra l'origine, e poi riceve il contenuto del form. */
+  private saveCopy(original: Network, payload: NetworkPayload): Observable<Network> {
+    const name = `${payload.name} (copia)`;
+    return this.networks.forkNetwork(original.id, name).pipe(
+      switchMap((copy) =>
+        this.networks.updateNetwork(copy.id, { ...payload, name }).pipe(
+          // Senza le modifiche la copia sarebbe un doppione dell'originale: si toglie e si mostra l'errore.
+          catchError((err) =>
+            this.networks.deleteNetwork(copy.id).pipe(
+              catchError(() => of(undefined)),
+              switchMap(() => throwError(() => err)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  private show(network: Network | null, notice: string | null): void {
+    this.network.set(network);
+    this.replaceForm(network ? toFormValue(network) : EMPTY_FORM);
+    this.form.markAsUntouched();
+    this.presetToConfirm.set(null);
+    this.dirty.set(false);
+    this.notice.set(notice);
+    this.loading.set(false);
+  }
+
+  /** Un contenuto caricato per intero si disegna subito, senza aspettare il ritardo. */
+  private replaceForm(value: NetworkFormValue): void {
+    fillForm(this.form, value);
+    this.nextKey = value.populations.length;
+    this.draft.set(toDraft(value));
+  }
+
+  private navigationNotice(): string | null {
+    const notice: unknown = this.router.getCurrentNavigation()?.extras.state?.['notice'];
+    return typeof notice === 'string' ? notice : null;
   }
 }
