@@ -12,8 +12,7 @@ import { RaceModelStats, pairRaceModel } from './results-helpers';
   host: { class: 'block space-y-4' },
   template: `
     <p class="text-sm text-muted">
-      Confronto tra la distribuzione cumulativa dei tempi di reazione AV e il limite del modello a gara,
-      <span class="num">min(1, F_V + F_A)</span>.
+      Confronto tra la distribuzione cumulativa dei tempi di reazione AV e il limite del modello a gara.
     </p>
     @for (entry of entries(); track $index) {
       <article class="panel">
@@ -59,6 +58,7 @@ import { RaceModelStats, pairRaceModel } from './results-helpers';
                   </tbody>
                 </table>
               </div>
+              <p class="help">{{ boundText(stats) }}</p>
               <p class="help">
                 @if (stats.method === 'rate_threshold_crossing') {
                   Tempo di reazione: primo superamento della soglia di frequenza di scarica dopo lo stimolo.
@@ -76,6 +76,15 @@ import { RaceModelStats, pairRaceModel } from './results-helpers';
   `,
 })
 export class RaceModelSectionComponent {
+  /** Il limite usato è cambiato nel tempo: i risultati salvati dicono con quale sono stati calcolati. */
+  protected boundText(stats: RaceModelStats): string {
+    if (stats.trials) return 'Limite di Miller, min(1, F_V + F_A), con le distribuzioni calcolate su tutti i trial.';
+    if (stats.method === 'rate_threshold_crossing') {
+      return 'Limite di Miller, min(1, F_V + F_A), con le distribuzioni calcolate sui soli trial con risposta.';
+    }
+    return 'Limite del modello a gara indipendente, F_V + F_A − F_V·F_A, sui soli trial con risposta.';
+  }
+
   readonly graphs = input.required<RaceModelGraph[]>();
   readonly results = input.required<RaceModelStats[]>();
 
