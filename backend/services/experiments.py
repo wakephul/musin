@@ -35,7 +35,7 @@ def estimate_duration_ms(params: dict) -> float:
 
         if kind == "decision_making":
             dm = _section(params, "decision_making")
-            return float(dm.get("trial_slot_ms", 1000.0)) * int(dm.get("num_trials", 12))
+            return float(dm.get("trial_slot_ms", 3000.0)) * int(dm.get("num_trials", 12))
 
         if kind == "cerebellum_conditioning":
             n_trials = int(params.get("n_train", 20)) + 3 * int(params.get("n_test", 20))

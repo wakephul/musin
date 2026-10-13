@@ -1,47 +1,39 @@
 """
-Audiovisual Decision-Making experiment — NEST 3.8 port.
+Decisione audiovisiva: rete attrattore a due popolazioni (Wang), port NEST 2.18 → 3.8
+del modello `decision_making_nrp.py`.
 
-Faithful re-implementation of the legacy NEST 2.18 pipeline
-(`decision_making_nrp.py` + `main.py` + stimulus/analysis helpers) that powered
-the audiovisual multisensory decision experiment:
+  * Due popolazioni eccitatorie in competizione (A, B) e un pool inibitorio comune,
+    su `iaf_psc_exp_multisynapse` con recettori rumore / AMPA / NMDA / GABA e pesi
+    normalizzati sul PSP.
+  * L'evidenza sensoriale è un treno di Poisson per afferenza, con latenza del primo
+    spike per modalità (uditivo 150 ms, visivo 220 ms). Nella condizione audiovisiva
+    le due modalità arrivano sulle stesse afferenze: l'evidenza inizia prima ed è
+    più densa.
+  * Ogni trial stimola un solo lato (A o B, bilanciati). Il tempo di risposta è il
+    primo istante in cui la frequenza di una delle due popolazioni sale sopra soglia;
+    la risposta è corretta se a salire è la popolazione stimolata.
 
-  * Two competing excitatory populations (A, B) and a shared inhibitory pool,
-    a Wang-style attractor decision network built on `iaf_psc_exp_multisynapse`
-    with AMPA / NMDA / GABA / noise receptors and computed (PSP-normalized)
-    weights.
-  * Sensory evidence delivered as Poisson spike trains with a modality-specific
-    first-spike latency: auditory = 150 ms, visual = 220 ms. The audiovisual
-    condition merges both, producing earlier/denser evidence (race-model
-    multisensory facilitation).
-  * Trials of `trial_slot` ms are interleaved between side A and side B; the
-    response time of a trial is the first moment the winning population's
-    moving-average firing rate crosses `threshold`. The distribution of
-    response times (CDF) is the headline result.
-
-NEST 2.18 -> 3.8 API changes handled here:
-  * `spike_detector` -> `spike_recorder`
-  * `syn_spec={"model": ...}` -> `{"synapse_model": ...}`
-  * recorder/`multimeter` no longer take withgid/withtime/to_file
-  * `nest.ll_api.sli_func('LambertWm1', x)` -> `scipy.special.lambertw(x, k=-1)`
-  * multi-seed RNG dict -> single `rng_seed`
-  * `NodeCollection` indexing instead of GID tuples
-
-Bit-exact reproduction across NEST 2.18 and 3.8 is not possible (different RNG
-and kernel internals); the experiment design, parameters and statistics are
-reproduced faithfully so the qualitative/quantitative result (multisensory
-facilitation of response times) matches.
+Ogni trial ha una realizzazione di Poisson indipendente (il codice originale
+riusava lo stesso treno in tutti i trial).
 """
 
-import io
-import gc
-import json
-import random
 import logging
 
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from scipy.special import lambertw
 
+from worker import nest_utils
+from worker.analysis import binned_rate, ecdf, first_upward_crossing, median_or_none, poisson_trains, trailing_mean
+from worker.networks.generic import plot_population
+from worker.results import ResultStore
+
 logger = logging.getLogger(__name__)
+
+SIMULATION_CHUNK_MS = 500.0
+SMOOTHING_BINS = 10
 
 # Modality first-spike latencies (ms) — from data/config/execution_types.json
 MODALITY_LATENCY = {
@@ -94,7 +86,9 @@ DEFAULT_EXPERIMENT = {
     "rate": 30.0,                # Hz of the sensory Poisson drive
     "number_of_neurons": 80,     # sensory afferents per side
     "stimulus_window_ms": 600.0, # stimulus is active within [latency, window]
-    "trial_slot_ms": 1000.0,     # length of one decision trial
+    # L'attività persistente dell'attrattore dura circa 2 s dopo lo stimolo: con trial
+    # più corti il vincitore del trial precedente sopprime la risposta al successivo.
+    "trial_slot_ms": 3000.0,
     "num_trials": 12,            # legacy full run uses 60 (test_time 60000 ms)
     "threshold": 15.0,           # Hz; rate crossing that defines a response
     "bin_size_ms": 5.0,
@@ -126,73 +120,12 @@ def _compute_psp_norm(tau_mem: float, C_mem: float, tau_syn: float) -> float:
 
 
 # ----------------------------------------------------------------------------
-# Stimulus generation
-# ----------------------------------------------------------------------------
-
-def _generate_single_trial_trains(nest, rate, latency, n_neurons, window_ms, seed):
-    """Reproduce poisson_spikes_generator_parrot: a Poisson generator drives
-    `n_neurons` parrot neurons over one trial window, returning one spike-time
-    list per afferent (relative to trial start)."""
-    nest.ResetKernel()
-    nest.SetKernelStatus({"resolution": 0.1, "rng_seed": int(seed)})
-    pg = nest.Create("poisson_generator", params={"rate": float(rate), "start": float(latency), "stop": float(window_ms)})
-    parrots = nest.Create("parrot_neuron", int(n_neurons))
-    rec = nest.Create("spike_recorder")
-    nest.Connect(pg, parrots, "all_to_all")
-    nest.Connect(parrots, rec, "all_to_all")
-    nest.Simulate(float(window_ms) + 1.0)
-
-    events = nest.GetStatus(rec, "events")[0]
-    first_gid = parrots[0].global_id
-    trains = [[] for _ in range(int(n_neurons))]
-    for sender, t in zip(events["senders"], events["times"]):
-        idx = int(sender) - first_gid
-        if 0 <= idx < n_neurons:
-            trains[idx].append(round(float(t), 1))
-    return trains
-
-
-def _build_side_stimulus(nest, exp, latency_a, latency_b, seed):
-    """Build per-afferent single-trial trains for one side, optionally merging
-    two modalities (audiovisual). latency_b is None for unimodal."""
-    trains = _generate_single_trial_trains(
-        nest, exp["rate"], latency_a, exp["number_of_neurons"],
-        exp["stimulus_window_ms"], seed,
-    )
-    if latency_b is not None:
-        trains_2 = _generate_single_trial_trains(
-            nest, exp["rate"], latency_b, exp["number_of_neurons"],
-            exp["stimulus_window_ms"], seed + 7,
-        )
-        merged = []
-        for ta, tb in zip(trains, trains_2):
-            merged.append(sorted(set([round(x, 1) for x in ta] + [round(x, 1) for x in tb])))
-        trains = merged
-    return trains
-
-
-def _tile_trains_across_trials(single_trains, active_trials, trial_slot):
-    """Tile one-trial afferent trains across the trials where this side is
-    active, shifting each by the trial's start time."""
-    tiled = [[] for _ in single_trains]
-    for trial_idx, is_active in enumerate(active_trials):
-        if not is_active:
-            continue
-        offset = trial_idx * trial_slot
-        for n, train in enumerate(single_trains):
-            tiled[n].extend([round(t + offset, 1) for t in train])
-    for n in range(len(tiled)):
-        tiled[n] = sorted(set(tiled[n]))
-    return tiled
-
-
-# ----------------------------------------------------------------------------
 # Network
 # ----------------------------------------------------------------------------
 
-def _build_network(nest, par, trains_a, trains_b):
-    """Build the Wang two-population attractor and attach the tiled stimuli.
-    Returns recorders and monitored sub-populations for A, B and inhibitory."""
+def _build_network(nest, par, trains_a, trains_b, rng):
+    """Costruisce l'attrattore di Wang e collega gli stimoli. Restituisce i registratori
+    di spike delle tre popolazioni e il numero di neuroni di ciascuna."""
     order = int(par["order"])
     NA = NB = 2 * order
     NI = 1 * order
@@ -236,16 +169,9 @@ def _build_network(nest, par, trains_a, trains_b):
     nest.Connect(PG_noise_B, pop_B, syn_spec=noise_syn)
     nest.Connect(PG_noise_inh, pop_inh, syn_spec=noise_syn)
 
-    # Sensory stimulus: one spike_generator per afferent train -> all_to_all.
-    def make_generators(trains):
-        nodes = nest.Create("spike_generator", len(trains))
-        for i, train in enumerate(trains):
-            if train:
-                nest.SetStatus(nodes[i], {"spike_times": list(train)})
-        return nodes
-
-    PG_input_A = make_generators(trains_a)
-    PG_input_B = make_generators(trains_b)
+    # Stimolo sensoriale: uno spike_generator per afferenza, all_to_all sulla popolazione.
+    PG_input_A = nest_utils.set_spike_trains(nest, trains_a)
+    PG_input_B = nest_utils.set_spike_trains(nest, trains_b)
 
     nest.CopyModel("static_synapse", "AMPA_input", {"weight": J_norm_AMPA, "delay": par["delay_AMPA"]})
     AMPA_input_syn = {"synapse_model": "AMPA_input", "receptor_type": 2}
@@ -296,289 +222,148 @@ def _build_network(nest, par, trains_a, trains_b):
     nest.Connect(pop_inh, pop_A, c_IA, s_GABA_IA)
     nest.Connect(pop_inh, pop_B, c_IA, s_GABA_IA)
 
-    # Set noise rates (single sample, legacy behavior)
-    rng = np.random.default_rng(int(par.get("_np_seed", 1234)))
+    # Frequenza del rumore di fondo: un campione per popolazione, come nell'originale.
     nest.SetStatus(PG_noise_A, {"rate": float(rng.normal(p_rate_ex, p_rate_ex / par["std_noise"]))})
     nest.SetStatus(PG_noise_B, {"rate": float(rng.normal(p_rate_ex, p_rate_ex / par["std_noise"]))})
     nest.SetStatus(PG_noise_inh, {"rate": float(rng.normal(p_rate_in, p_rate_in / par["std_noise"]))})
 
-    # Recorders on a monitored subset (legacy rec_pop = 1.0 -> all)
-    def monitor(pop):
-        k = max(1, int(par["rec_pop"] * len(pop)))
-        idx = sorted(random.sample(range(len(pop)), k))
-        sub = pop[idx]
-        rec = nest.Create("spike_recorder")
-        nest.Connect(sub, rec)
-        return rec, len(sub)
-
-    rec_A, n_A = monitor(pop_A)
-    rec_B, n_B = monitor(pop_B)
-    rec_inh, n_inh = monitor(pop_inh)
-
-    return {
-        "rec_A": rec_A, "rec_B": rec_B, "rec_inh": rec_inh,
-        "n_A": n_A, "n_B": n_B, "n_inh": n_inh,
-    }
+    recorders = {}
+    for pop_id, nodes in (("pop_A", pop_A), ("pop_B", pop_B), ("pop_inh", pop_inh)):
+        recorder = nest.Create("spike_recorder")
+        nest.Connect(nodes, recorder)
+        recorders[pop_id] = (recorder, len(nodes))
+    return recorders
 
 
-# ----------------------------------------------------------------------------
-# Analysis
-# ----------------------------------------------------------------------------
-
-def _binned_rate(times, n_neurons, bin_size, total_ms):
-    """Population firing rate (Hz) per bin."""
-    if n_neurons <= 0:
-        n_neurons = 1
-    edges = np.arange(0.0, total_ms + bin_size, bin_size)
-    counts, _ = np.histogram(np.asarray(times, dtype=float), bins=edges)
-    rate = counts * 1000.0 / (bin_size * n_neurons)
-    return edges[:-1], rate
-
-
-def _moving_average(values, window=10):
-    if len(values) == 0:
-        return values
-    pad = window // 2
-    padded = np.concatenate([np.zeros(pad), values, np.zeros(pad)])
-    out = np.convolve(padded, np.ones(window) / window, mode="same")
-    return out[pad:pad + len(values)]
-
-
-def _response_times(rate_curve, bin_centers, active_trials, trial_slot, threshold):
-    """First within-trial time (ms) the rate crosses threshold, for trials
-    where this side is active. Returns list of latencies relative to trial start."""
-    rts = []
-    for trial_idx, is_active in enumerate(active_trials):
-        if not is_active:
-            continue
-        t0 = trial_idx * trial_slot
-        t1 = t0 + trial_slot
-        mask = (bin_centers >= t0) & (bin_centers < t1)
-        seg_rate = rate_curve[mask]
-        seg_time = bin_centers[mask] - t0
-        crossings = np.where(seg_rate >= threshold)[0]
-        if len(crossings):
-            rts.append(float(seg_time[crossings[0]]))
-    return rts
-
-
-def _cdf(data, n_bins=10):
-    if len(data) == 0:
-        return np.array([]), np.array([])
-    counts, edges = np.histogram(data, bins=n_bins)
-    pdf = counts / max(1, counts.sum())
-    return edges[1:], np.cumsum(pdf)
-
-
-# ----------------------------------------------------------------------------
-# Orchestrator
-# ----------------------------------------------------------------------------
-
-def run_decision_making_experiment(task, simulation_id, exp_params, minio_service, progress_cb=None):
-    """Run the full audiovisual decision-making experiment and upload artifacts.
-
-    Returns a dict with the experiment metrics. Plots are uploaded to
-    `results/<owner>/sim_<id>/` so the existing results endpoint serves them.
-    """
+def run_decision_making_experiment(task, sim_info, exp_params, minio_service, progress_cb):
     import nest
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
-    cfg = dict(DEFAULT_EXPERIMENT)
-    cfg.update(exp_params.get("decision_making", {}) or {})
-
-    par = dict(DEFAULT_NETWORK_PARAMS)
-    par.update(exp_params.get("network_overrides", {}) or {})
-    par["order"] = int(cfg["order"])
-    par["rec_pop"] = par.get("rec_pop", 1.0)
-    par["_np_seed"] = int(cfg["seed"])
+    cfg = {**DEFAULT_EXPERIMENT, **(exp_params.get("decision_making") or {})}
+    par = {**DEFAULT_NETWORK_PARAMS, **(exp_params.get("network_overrides") or {}), "order": int(cfg["order"])}
+    store = ResultStore(minio_service, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
+    seed = int(cfg["seed"])
+    rng = np.random.default_rng(seed)
 
     modality = cfg["modality"]
-    trial_slot = float(cfg["trial_slot_ms"])
+    if modality not in ("auditory", "visual", "audiovisual"):
+        raise ValueError(f"Modalità sconosciuta: {modality}")
+    latencies = [MODALITY_LATENCY[m] for m in ("auditory", "visual") if modality in (m, "audiovisual")]
+    trial_ms = float(cfg["trial_slot_ms"])
+    window_ms = float(cfg["stimulus_window_ms"])
     num_trials = int(cfg["num_trials"])
-    bin_size = float(cfg["bin_size_ms"])
     threshold = float(cfg["threshold"])
-    total_ms = trial_slot * num_trials
+    bin_ms = float(cfg["bin_size_ms"])
+    total_ms = trial_ms * num_trials
+    resolution = float(par["dt"])
 
-    # Modality latencies
-    if modality == "auditory":
-        lat_a = lat_b = MODALITY_LATENCY["auditory"]
-        merge_second = None
-    elif modality == "visual":
-        lat_a = lat_b = MODALITY_LATENCY["visual"]
-        merge_second = None
-    else:  # audiovisual: merge auditory + visual evidence
-        lat_a = MODALITY_LATENCY["auditory"]
-        merge_second = MODALITY_LATENCY["visual"]
+    # Lato stimolato per trial, bilanciato e in ordine casuale.
+    sides = [("pop_A", "pop_B")[i % 2] for i in range(num_trials)]
+    rng.shuffle(sides)
+    n_afferents = int(cfg["number_of_neurons"])
+    trains = {"pop_A": [[] for _ in range(n_afferents)], "pop_B": [[] for _ in range(n_afferents)]}
+    for index, side in enumerate(sides):
+        start = index * trial_ms
+        for latency in latencies:
+            trial_trains = poisson_trains(rng, float(cfg["rate"]), n_afferents, start + latency, start + window_ms, resolution)
+            for train, spikes in zip(trains[side], trial_trains):
+                train.extend(spikes)
+    trains = {side: [sorted(set(train)) for train in side_trains] for side, side_trains in trains.items()}
 
-    random.seed(int(cfg["seed"]))
+    progress_cb(5, "Costruzione della rete")
+    nest_utils.init_kernel(nest, resolution, seed)
+    recorders = _build_network(nest, par, trains["pop_A"], trains["pop_B"], rng)
 
-    # 1) Single-trial sensory trains for side A and side B
-    if progress_cb:
-        progress_cb(5, "Generating sensory stimuli")
-    trains_A_single = _build_side_stimulus(nest, cfg, lat_a, merge_second, seed=int(cfg["seed"]))
-    trains_B_single = _build_side_stimulus(nest, cfg, lat_a, merge_second, seed=int(cfg["seed"]) + 101)
+    simulated = 0.0
+    while simulated < total_ms:
+        chunk = min(SIMULATION_CHUNK_MS, total_ms - simulated)
+        nest.Simulate(chunk)
+        simulated += chunk
+        progress_cb(10 + 80 * simulated / total_ms, f"Simulazione: {simulated / 1000:.1f} di {total_ms / 1000:.1f} s")
 
-    # 2) Assign trials to sides (balanced, shuffled — legacy seed 1234)
-    side_flags = [bool(i % 2) for i in range(num_trials)]
-    random.seed(1234)
-    random.shuffle(side_flags)
-    active_A = [not f for f in side_flags]   # A active on even-side trials
-    active_B = list(side_flags)
+    progress_cb(92, "Analisi")
+    spikes = {pop_id: nest_utils.spike_events(recorder) for pop_id, (recorder, _) in recorders.items()}
+    sizes = {pop_id: size for pop_id, (_, size) in recorders.items()}
+    store.put_json("spikes.json", {"metadata": {"total_ms": total_ms, "seed": seed}, "spikes": spikes}, in_zip=False)
+    for pop_id, events in spikes.items():
+        plot_population(store, pop_id, events, sizes[pop_id], total_ms, None)
 
-    trains_A = _tile_trains_across_trials(trains_A_single, active_A, trial_slot)
-    trains_B = _tile_trains_across_trials(trains_B_single, active_B, trial_slot)
+    rates = {}
+    for pop_id in ("pop_A", "pop_B"):
+        bin_starts, raw = binned_rate(spikes[pop_id]["times"], sizes[pop_id], bin_ms, total_ms)
+        rates[pop_id] = trailing_mean(raw, SMOOTHING_BINS)
 
-    # 3) Build network
-    if progress_cb:
-        progress_cb(20, "Building decision network")
-    nest.ResetKernel()
-    nest.SetKernelStatus({
-        "resolution": float(par["dt"]),
-        "rng_seed": int(cfg["seed"]),
-        "local_num_threads": 6,
-        "print_time": False,
-    })
-    mon = _build_network(nest, par, trains_A, trains_B)
+    # Risposta di un trial: la prima popolazione che sale sopra soglia dopo l'arrivo dello stimolo.
+    response_times, details, correct = [], [], 0
+    for index, side in enumerate(sides):
+        start = index * trial_ms
+        response, winner = None, "none"
+        for pop_id, rate in rates.items():
+            crossing = first_upward_crossing(bin_starts, rate, threshold, start + min(latencies), start + trial_ms)
+            if crossing is not None and (response is None or crossing < response):
+                response, winner = crossing, pop_id
+        if winner == side:
+            correct += 1
+            response_times.append(response - start)
+        details.append({
+            "trial": index + 1,
+            "active_stimuli": [side],
+            "condition_label": modality,
+            "expected_winner": side,
+            "actual_winner": winner,
+            "is_correct": winner == side,
+            "response_time_ms": None if response is None else round(response - start, 1),
+            "net_evidence": 0,
+        })
+    missed = sum(1 for row in details if row["actual_winner"] == "none")
 
-    # 4) Simulate in chunks with progress + GC
-    if progress_cb:
-        progress_cb(30, "Simulating")
-    chunk = 500.0
-    done = 0.0
-    while done < total_ms:
-        step = min(chunk, total_ms - done)
-        nest.Simulate(step)
-        done += step
-        if progress_cb:
-            progress_cb(30 + int(60 * done / total_ms), "Simulating")
-        gc.collect()
+    fig, ax = plt.subplots(figsize=(11, 4))
+    for index, side in enumerate(sides):
+        ax.axvspan(index * trial_ms, index * trial_ms + window_ms, alpha=0.08,
+                   color="#0f6e6e" if side == "pop_A" else "#b42318")
+    ax.plot(bin_starts, rates["pop_A"], color="#0f6e6e", lw=1.3, label="pop_A")
+    ax.plot(bin_starts, rates["pop_B"], color="#b42318", lw=1.3, label="pop_B")
+    ax.axhline(threshold, color="#1c1c1a", ls="--", lw=1, label=f"Soglia ({threshold:g} Hz)")
+    ax.set(title="Competizione tra pop_A e pop_B (sfondo: lato stimolato)", xlabel="Tempo (ms)", ylabel="Hz per neurone")
+    ax.legend(fontsize=9, loc="upper right")
+    store.put_figure("exp_competizione_A_B.png", fig)
 
-    # 5) Collect spikes
-    ev_A = nest.GetStatus(mon["rec_A"], "events")[0]
-    ev_B = nest.GetStatus(mon["rec_B"], "events")[0]
-    ev_inh = nest.GetStatus(mon["rec_inh"], "events")[0]
-    times_A, sen_A = list(ev_A["times"]), list(ev_A["senders"])
-    times_B, sen_B = list(ev_B["times"]), list(ev_B["senders"])
-    times_inh, sen_inh = list(ev_inh["times"]), list(ev_inh["senders"])
+    fig, ax = plt.subplots(figsize=(8, 5))
+    grid = np.arange(0.0, trial_ms + bin_ms, bin_ms)
+    ax.step(grid, ecdf(response_times, grid, num_trials), where="post", color="#0f6e6e", lw=2,
+            label=f"{modality} ({len(response_times)}/{num_trials} risposte corrette)")
+    ax.set(title="Tempi di risposta", xlabel="Tempo dall'inizio del trial (ms)",
+           ylabel="Frazione dei trial con risposta corretta", ylim=(0, 1.05))
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.3)
+    store.put_figure("exp_tempi_di_risposta.png", fig)
 
-    if progress_cb:
-        progress_cb(92, "Analyzing & plotting")
+    store.put_json("accuracy_metrics.json", {"metrics": [{
+        "comparison": "Popolazione stimolata contro popolazione che risponde per prima",
+        "accuracy_percent": round(100.0 * correct / num_trials, 2) if num_trials else None,
+        "total_valid_trials": num_trials,
+        "correct_trials": correct,
+        "trial_details": details,
+    }]})
 
-    # 6) Rates + response times
-    centers_A, rate_A = _binned_rate(times_A, mon["n_A"], bin_size, total_ms)
-    centers_B, rate_B = _binned_rate(times_B, mon["n_B"], bin_size, total_ms)
-    ma_A = _moving_average(rate_A)
-    ma_B = _moving_average(rate_B)
-
-    rt_A = _response_times(ma_A, centers_A, active_A, trial_slot, threshold)
-    rt_B = _response_times(ma_B, centers_B, active_B, trial_slot, threshold)
-    response_times = rt_A + rt_B
-
-    avg_rate_A = float(len(times_A) * 1000.0 / total_ms / max(1, mon["n_A"]))
-    avg_rate_B = float(len(times_B) * 1000.0 / total_ms / max(1, mon["n_B"]))
-    avg_rate_inh = float(len(times_inh) * 1000.0 / total_ms / max(1, mon["n_inh"]))
-
-    # 7) Plots -> MinIO (names chosen so the results endpoint discovers them)
-    import zipfile
-    base_path = f"results/{simulation_id['owner_id']}/sim_{simulation_id['sim_id']}"
-    zip_buf = io.BytesIO()
-    zf = zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED)
-
-    def upload_png(fig, name):
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        data = buf.getvalue()
-        minio_service.upload_file(io.BytesIO(data), len(data), f"{base_path}/{name}", "image/png")
-        zf.writestr(name, data)
-        del buf
-
-    # Per-population rasters + PSTH (named to match topology pop ids pop_A/pop_B/pop_inh)
-    for pop_id, times, senders in (
-        ("pop_A", times_A, sen_A), ("pop_B", times_B, sen_B), ("pop_inh", times_inh, sen_inh),
-    ):
-        fig = plt.figure(figsize=(9, 4))
-        if times:
-            plt.scatter(times, senders, s=1.5, color="#2563eb" if pop_id != "pop_B" else "#dc2626")
-        plt.title(f"Raster — {pop_id}")
-        plt.xlabel("Time (ms)"); plt.ylabel("Neuron")
-        upload_png(fig, f"{pop_id}_raster.png")
-
-        fig = plt.figure(figsize=(9, 4))
-        if times:
-            plt.hist(times, bins=80, color="#7c3aed", alpha=0.75)
-        plt.title(f"Spike histogram — {pop_id}")
-        plt.xlabel("Time (ms)"); plt.ylabel("Spikes")
-        upload_png(fig, f"{pop_id}_histogram.png")
-        gc.collect()
-
-    # A vs B competition (population rate over time)
-    fig = plt.figure(figsize=(11, 4))
-    plt.plot(centers_A, ma_A, color="#2563eb", lw=1.5, label="Pop A (rate)")
-    plt.plot(centers_B, ma_B, color="#dc2626", lw=1.5, label="Pop B (rate)")
-    plt.axhline(threshold, color="black", ls="--", lw=1, alpha=0.6, label=f"Threshold ({threshold:g} Hz)")
-    for i in range(num_trials):
-        plt.axvline(i * trial_slot, color="#cbd5e1", lw=0.5)
-    plt.title("Decision competition — Pop A vs Pop B")
-    plt.xlabel("Time (ms)"); plt.ylabel("Firing rate (Hz)")
-    plt.legend(fontsize=9)
-    upload_png(fig, "exp_A_vs_B_competition.png")
-
-    # Response-time CDF
-    x_cdf, y_cdf = _cdf(response_times, n_bins=10)
-    fig = plt.figure(figsize=(8, 5))
-    if len(x_cdf):
-        plt.plot(x_cdf, y_cdf, "--o", color="#16a34a", label=f"{modality} (n={len(response_times)})")
-    plt.xlim(0, max(600.0, cfg["stimulus_window_ms"]))
-    plt.ylim(0, 1.05)
-    plt.title("Response-time CDF")
-    plt.xlabel("Response time (ms)"); plt.ylabel("Cumulative probability")
-    plt.legend(fontsize=9); plt.grid(alpha=0.3)
-    upload_png(fig, "exp_response_time_CDF.png")
-
-    # 8) Metrics JSON
+    mean_rate = {pop_id: len(spikes[pop_id]["times"]) * 1000.0 / total_ms / sizes[pop_id] for pop_id in spikes}
     metrics = {
         "experiment": "audiovisual_decision_making",
         "modality": modality,
         "num_trials": num_trials,
-        "trials_active_A": int(sum(active_A)),
-        "trials_active_B": int(sum(active_B)),
-        "response_times_ms": [round(x, 1) for x in response_times],
-        "median_response_time_ms": round(float(np.median(response_times)), 1) if response_times else None,
+        "correct_trials": correct,
+        "wrong_trials": num_trials - correct - missed,
+        "missed_trials": missed,
+        "response_times_ms": [round(rt, 1) for rt in response_times],
+        "median_response_time_ms": median_or_none(response_times),
         "mean_response_time_ms": round(float(np.mean(response_times)), 1) if response_times else None,
-        "avg_rate_A_hz": round(avg_rate_A, 2),
-        "avg_rate_B_hz": round(avg_rate_B, 2),
-        "avg_rate_inh_hz": round(avg_rate_inh, 2),
+        "avg_rate_A_hz": round(mean_rate["pop_A"], 2),
+        "avg_rate_B_hz": round(mean_rate["pop_B"], 2),
+        "avg_rate_inh_hz": round(mean_rate["pop_inh"], 2),
         "threshold_hz": threshold,
         "network_order": par["order"],
         "n_neurons_per_excitatory_pop": 2 * par["order"],
     }
-    mbytes = json.dumps(metrics, indent=2).encode("utf-8")
-    minio_service.upload_file(io.BytesIO(mbytes), len(mbytes), f"{base_path}/experiment_metrics.json", "application/json")
-    zf.writestr("experiment_metrics.json", mbytes)
-
-    # Raw spikes (keeps the detail page "Raw Spikes" download working)
-    spikes_payload = {
-        "metadata": {"simulation_id": simulation_id["sim_id"], "total_duration_ms": total_ms, "experiment": "audiovisual_decision_making"},
-        "spikes": {
-            "pop_A": {"senders": [int(s) for s in sen_A], "times": [float(t) for t in times_A]},
-            "pop_B": {"senders": [int(s) for s in sen_B], "times": [float(t) for t in times_B]},
-            "pop_inh": {"senders": [int(s) for s in sen_inh], "times": [float(t) for t in times_inh]},
-        },
-    }
-    sbytes = json.dumps(spikes_payload).encode("utf-8")
-    minio_service.upload_file(io.BytesIO(sbytes), len(sbytes), f"{base_path}/spikes.json", "application/json")
-    del sbytes
-
-    # Finalize ZIP of all artifacts
-    zf.close()
-    zbytes = zip_buf.getvalue()
-    minio_service.upload_file(io.BytesIO(zbytes), len(zbytes), f"{base_path}/graphs.zip", "application/zip")
-    del zbytes
-
-    if progress_cb:
-        progress_cb(100, "Done")
-    gc.collect()
+    store.put_json("experiment_metrics.json", metrics)
+    store.close()
+    progress_cb(100, "Completata")
     return metrics
