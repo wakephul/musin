@@ -49,14 +49,20 @@ def test_a_valid_link_to_a_deleted_file_is_not_found(client, files, link):
 def test_names_cannot_escape_the_storage_directory(client, files, tmp_path):
     (tmp_path / "secret.txt").write_text("fuori dallo storage")
     local = FileStorage(tmp_path / "storage")
-    for name in ("../secret.txt", "a/../../secret.txt", "/etc/passwd", ""):
+    local.write("results/1/sim_1/a.png", b"a")
+    (local.root / ".secret_key").write_text("chiave")
+    for name in ("../secret.txt", "a/../../secret.txt", "/etc/passwd", "", ".secret_key", "results/.nascosto/x"):
         with pytest.raises(ValueError):
             local.path(name)
         # Nemmeno con una firma valida: il nome viene comunque rifiutato.
         assert local.verify(name, int(time.time()) + 60, local._signature(name, int(time.time()) + 60)) is None
-    outside = "../test.db"
-    url = files.signed_url(outside)
-    assert client.get(url).status_code in (403, 404)
+
+    # Attraverso l'API, con il percorso codificato (un client normalizzerebbe i "../" in chiaro)
+    # e una firma autentica per quel nome: la risposta non deve mai essere il file.
+    expires = int(time.time()) + 60
+    for name, encoded in (("../test.db", "..%2Ftest.db"), (".secret_key", ".secret_key")):
+        response = client.get(f"/api/v1/files/{encoded}?expires={expires}&signature={files._signature(name, expires)}")
+        assert response.status_code == 403, name
 
 
 def test_storage_lists_and_deletes_whole_directories_only(files):

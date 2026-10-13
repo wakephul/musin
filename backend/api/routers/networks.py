@@ -61,7 +61,9 @@ def read_network(db: SessionDep, current_user: CurrentUser, network_id: int) -> 
 @router.put("/{network_id}", response_model=NetworkResponse)
 def update_network(db: SessionDep, current_user: CurrentUser, network_id: int, network_in: NetworkUpdate) -> Network:
     network = _get_owned_network(db, network_id, current_user.id)
-    update_data = network_in.model_dump(exclude_unset=True)
+    # null esplicito ha senso solo per la descrizione (la svuota); altrove vale "non cambiare".
+    update_data = {key: value for key, value in network_in.model_dump(exclude_unset=True).items()
+                   if value is not None or key == "description"}
 
     # Il JSON va riassegnato per intero: SQLAlchemy non rileva le modifiche in place.
     definition = copy.deepcopy(network.definition)

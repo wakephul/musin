@@ -48,3 +48,10 @@ def test_change_password(client):
 def test_protected_routes_need_a_valid_token(client):
     assert client.get("/api/v1/networks").status_code == 401
     assert client.get("/api/v1/networks", headers={"Authorization": "Bearer not-a-token"}).status_code == 401
+
+
+def test_password_limit_is_in_bytes_not_characters(client):
+    """bcrypt legge 72 byte: due password diverse che coincidono nei primi 72 sarebbero equivalenti."""
+    accented = "è" * 41   # 41 caratteri, 82 byte
+    assert client.post(f"{API}/register", json={"email": "bytes@example.com", "password": accented}).status_code == 422
+    assert client.post(f"{API}/register", json={"email": "bytes@example.com", "password": "è" * 36}).status_code == 201

@@ -48,6 +48,9 @@ def test_hdf5_datasets_must_live_inside_the_file(tmp_path):
     ("s.json", b'{"senders": [1], "times": [1.0, 2.0]}'),
     ("s.json", b'{"spike_trains": [[]]}'),
     ("s.csv", b"1,2\nx,y\n"),
+    ("s.json", b'{"spike_trains": [[Infinity]]}'),
+    ("s.json", b'{"senders": [Infinity], "times": [1.0]}'),
+    ("s.json", b'{"spike_trains": [[NaN, 2.0]]}'),
 ])
 def test_invalid_files_are_rejected(filename, content):
     with pytest.raises(StimulusFormatError):
@@ -74,3 +77,15 @@ def test_upload_reports_format_errors(client, auth):
     response = client.post(f"{API}/upload", data={"name": "x"}, headers=auth, files={"file": ("rec.txt", b"1,2", "text/plain")})
     assert response.status_code == 422
     assert "Formato non supportato" in response.json()["detail"]
+
+
+def test_hdf5_declared_size_is_checked_before_reading():
+    """Un file di pochi KB può dichiarare un dataset da centinaia di milioni di valori."""
+    h5py = pytest.importorskip("h5py")
+    buffer = io.BytesIO()
+    with h5py.File(buffer, "w") as handle:
+        handle.create_dataset("senders", shape=(200_000_000,), dtype="i8")
+        handle.create_dataset("times", shape=(200_000_000,), dtype="f8")
+    assert len(buffer.getvalue()) < 100_000
+    with pytest.raises(StimulusFormatError, match="massimo"):
+        parse_stimulus_file("big.h5", buffer.getvalue())

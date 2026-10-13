@@ -1,12 +1,15 @@
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from backend.core.nest_models import CONNECTION_RULES
 from backend.models import SimulationStatus
 
 MAX_POPULATION_SIZE = 1_000_000
+BCRYPT_MAX_BYTES = 72
+# Gli id di popolazione finiscono nei nomi dei file dei risultati: niente separatori di percorso.
+POPULATION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$"
 
 # Il database salva le date in UTC senza fuso: vanno dichiarate UTC in uscita,
 # altrimenti il browser le legge come ora locale.
@@ -24,15 +27,25 @@ class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+def _fits_bcrypt(password: str) -> str:
+    # bcrypt considera solo i primi 72 byte: oltre, due password diverse coinciderebbero.
+    # Il limite è in byte, non in caratteri (una lettera accentata ne occupa due).
+    if len(password.encode("utf-8")) > BCRYPT_MAX_BYTES:
+        raise ValueError(f"La password supera i {BCRYPT_MAX_BYTES} byte")
+    return password
+
+
+Password = Annotated[str, Field(min_length=8), AfterValidator(_fits_bcrypt)]
+
+
 class UserCreate(BaseModel):
     email: EmailStr
-    # bcrypt considera solo i primi 72 byte: oltre, due password diverse coinciderebbero.
-    password: str = Field(min_length=8, max_length=72)
+    password: Password
 
 
 class PasswordChange(BaseModel):
     current_password: str
-    new_password: str = Field(min_length=8, max_length=72)
+    new_password: Password
 
 
 class Token(BaseModel):
@@ -44,7 +57,7 @@ class Token(BaseModel):
 # --- Reti ---
 
 class TopologyPopulation(BaseModel):
-    id: str = Field(min_length=1, max_length=64)
+    id: str = Field(pattern=POPULATION_ID_PATTERN)
     size: int = Field(ge=1, le=MAX_POPULATION_SIZE)
     neuron_model: str = Field(min_length=1)
     params: Dict[str, Any] = Field(default_factory=dict)

@@ -1,9 +1,11 @@
 """Operazioni NEST condivise dagli esperimenti."""
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
-NUM_THREADS = 6
+# Deve stare dentro le CPU concesse al container (WORKER_CPUS in docker-compose).
+NUM_THREADS = max(1, int(float(os.environ.get("NEST_THREADS", "6"))))
 MAX_RECORDED_NEURONS = 250
 
 # I modelli NESTML di CerebNEST non espongono tutti i parametri in GetDefaults():
@@ -60,7 +62,19 @@ def sanitize_params(nest, params: dict) -> dict:
     return sanitized
 
 
+def check_model(nest, model: str, allowed: tuple) -> None:
+    """Un nome di modello arriva dall'utente: si creano solo neuroni e generatori, non i
+    registratori, che possono scrivere file dove vogliono."""
+    try:
+        element_type = nest.GetDefaults(model, "element_type")
+    except Exception as exc:
+        raise ValueError(f"Modello NEST sconosciuto: {model}") from exc
+    if element_type not in allowed:
+        raise ValueError(f"Il modello {model} è di tipo '{element_type}': qui servono {' o '.join(allowed)}")
+
+
 def create_population(nest, model: str, size: int, params: dict):
+    check_model(nest, model, ("neuron", "stimulator"))
     params = sanitize_params(nest, params or {})
     if model not in CEREBNEST_MODELS:
         known = nest.GetDefaults(model).keys()

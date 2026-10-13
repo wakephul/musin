@@ -2,6 +2,7 @@
 import io
 import json
 import zipfile
+from pathlib import PurePosixPath
 
 import matplotlib
 matplotlib.use("Agg")
@@ -18,6 +19,10 @@ class ResultStore:
         self._zip = zipfile.ZipFile(self._zip_buffer, "w", zipfile.ZIP_DEFLATED)
 
     def put(self, name: str, data: bytes, in_zip: bool = True) -> None:
+        # I nomi derivano dagli id di popolazione: un separatore di percorso farebbe
+        # scrivere fuori dalla cartella di questa simulazione.
+        if PurePosixPath(name).name != name or "\\" in name or name.startswith("."):
+            raise ValueError(f"Nome di file non valido: {name}")
         self._storage.write(f"{self.base_path}/{name}", data)
         if in_zip:
             self._zip.writestr(name, data)

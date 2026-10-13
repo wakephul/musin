@@ -28,7 +28,10 @@ def test_topology_validation(client, auth):
     del no_degree["topology"]["projections"][0]["params"]["indegree"]
     bad_rule = copy.deepcopy(NETWORK)
     bad_rule["topology"]["projections"][0]["rule"] = "random"
-    for payload in (duplicated, dangling, no_degree, bad_rule):
+    # Gli id diventano nomi di file dei risultati: niente separatori di percorso.
+    traversal = copy.deepcopy(NETWORK)
+    traversal["topology"]["populations"][0]["id"] = "../../2/sim_5/GR"
+    for payload in (duplicated, dangling, no_degree, bad_rule, traversal):
         assert client.post(API, json=payload, headers=auth).status_code == 422
 
 
@@ -68,3 +71,12 @@ def test_model_catalogue_lists_the_reference_models(client, auth):
 
 def test_dates_are_returned_as_utc(network):
     assert network["created_at"].endswith(("Z", "+00:00"))
+
+
+def test_null_fields_in_an_update_leave_the_network_unchanged(client, auth, network):
+    response = client.put(f"{API}/{network['id']}", json={"name": None, "topology": None, "params": None}, headers=auth)
+    assert response.status_code == 200
+    assert response.json()["name"] == network["name"]
+    assert response.json()["definition"] == network["definition"]
+    cleared = client.put(f"{API}/{network['id']}", json={"description": None}, headers=auth).json()
+    assert cleared["description"] is None

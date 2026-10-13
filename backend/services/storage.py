@@ -27,6 +27,9 @@ class FileStorage:
         path = (self.root / name).resolve()
         if path == self.root or not path.is_relative_to(self.root):
             raise ValueError(f"Percorso fuori dallo storage: {name}")
+        # I file nascosti della radice (la chiave segreta) non sono contenuto dello storage.
+        if any(part.startswith(".") for part in path.relative_to(self.root).parts):
+            raise ValueError(f"Percorso non ammesso: {name}")
         return path
 
     def write(self, name: str, data: bytes) -> str:

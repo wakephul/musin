@@ -10,8 +10,10 @@ Formati accettati, tempi in millisecondi:
 import csv
 import io
 import json
+import math
 
 MAX_TRAINS = 5000
+MAX_SPIKES = 5_000_000
 
 
 class StimulusFormatError(ValueError):
@@ -70,6 +72,9 @@ def _parse_hdf5(raw: bytes) -> list[list[float]]:
             or dataset.dtype.kind not in "iuf"
         ):
             raise StimulusFormatError(f"Il file HDF5 deve contenere un dataset numerico '{name}' interno al file")
+        # La dimensione dichiarata non dipende da quella del file: va controllata prima di leggere.
+        if dataset.size > MAX_SPIKES:
+            raise StimulusFormatError(f"Il dataset '{name}' dichiara {dataset.size} valori: il massimo è {MAX_SPIKES}")
         return dataset[()].ravel().tolist()
 
     try:
@@ -87,11 +92,13 @@ def parse_stimulus_file(filename: str, raw: bytes) -> list[list[float]]:
         raise StimulusFormatError("Formato non supportato: usa .json, .csv, .h5 o .hdf5")
     try:
         trains = parser(raw)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         if isinstance(exc, StimulusFormatError):
             raise
         raise StimulusFormatError(f"Contenuto non valido: {exc}") from exc
 
+    if any(not math.isfinite(t) for train in trains for t in train):
+        raise StimulusFormatError("Il file contiene tempi non finiti (NaN o infinito)")
     trains = [sorted({round(t, 1) for t in train if t > 0}) for train in trains]
     trains = [train for train in trains if train]
     if not trains:
