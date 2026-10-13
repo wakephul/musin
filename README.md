@@ -31,7 +31,8 @@ The first build compiles NEST and CerebNEST from source and takes about ten minu
 
 > **MinIO image.** MinIO no longer publishes `minio/minio` on Docker Hub, so on a
 > machine that does not already have the image `docker compose up` fails to pull it.
-> Set `MINIO_IMAGE` in `.env` to an S3-compatible MinIO build you trust.
+> Set `MINIO_IMAGE` in `.env` to an S3-compatible MinIO build you trust, pinned by
+> digest (`name@sha256:…`).
 
 | What             | Where                      |
 | ---------------- | -------------------------- |
