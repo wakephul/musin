@@ -20,7 +20,7 @@ jobs:
       - run: pytest
 
   frontend:
-    name: Build frontend
+    name: Test e build frontend
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -33,4 +33,5 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - run: npm test
       - run: npm run build

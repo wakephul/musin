@@ -159,7 +159,11 @@ pip install -r backend/requirements.txt -r backend/requirements-dev.txt
 pytest
 ```
 
-or inside the image:
+```bash
+cd frontend && npm test                # logic of the editor, launch form and results page
+```
+
+Backend tests can also run inside the image:
 
 ```bash
 docker compose run --rm api sh -c "pip install -q -r backend/requirements-dev.txt && python -m pytest -p no:cacheprovider"
