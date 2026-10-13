@@ -1,7 +1,10 @@
 /** Etichette, vincoli e controlli dei parametri: una sola fonte per i campi dei moduli e per il blocco del lancio. */
 
+import { RULE_PARAMS } from '../../../core/data/connection-rules';
 import { MSI_REQUIRED_POPULATIONS } from '../../../core/data/protocol-presets';
 import { Population, Stimulus } from '../../../core/models';
+import { formatValue } from '../../../core/utils/format';
+import { isStimulusModel } from '../../../core/utils/topology';
 import {
   BUILTIN_DEFAULTS,
   BuiltinKind,
@@ -11,7 +14,6 @@ import {
   ExperimentParams,
   InputsDraft,
   MAX_SIMULATION_MS,
-  RULE_PARAMS,
   RunnerState,
   SENSORY_STIMULUS,
   SPIKE_TRAIN_STIMULUS,
@@ -43,7 +45,7 @@ const nonNegative = (label: string, help?: string): FieldMeta => ({ label, help,
 export const SEED: FieldMeta = {
   ...count('Seed'),
   max: 2 ** 32 - 1,
-  help: 'Seme dei generatori casuali: con lo stesso seed la simulazione si ripete identica.',
+  help: 'Valore iniziale dei generatori casuali: con lo stesso seed la simulazione si ripete identica.',
 };
 export const RESOLUTION = positive('Risoluzione (ms)', 'Passo di integrazione di NEST.');
 
@@ -54,6 +56,12 @@ export const SECTION_LABELS: Record<string, string> = {
   response: 'Lettura della risposta',
   decision_making: '',
 };
+
+// Frequenze, sorgenti e latenze stanno nella sezione di test ma il simulatore le usa per tutti i trial.
+const ALSO_IN_TRAINING = 'Vale anche per i trial di addestramento.';
+const MSI_LATENCY_HELP =
+  `Ritardo del primo spike dall'inizio del trial. ${ALSO_IN_TRAINING} ` +
+  "Una latenza che non rientra nella durata dello stimolo viene ignorata: lo stimolo parte all'inizio del trial.";
 
 const MSI_META: Record<string, FieldMeta> = {
   seed: SEED,
@@ -67,11 +75,11 @@ const MSI_META: Record<string, FieldMeta> = {
   },
   us_rate: nonNegative('Segnale di insegnamento (Hz)', 'Frequenza dei treni di Poisson inviati a IO_A.'),
   us_n_sources: count('Sorgenti del segnale di insegnamento'),
-  vis_rate: nonNegative('Stimolo visivo (Hz)'),
-  aud_rate: nonNegative('Stimolo uditivo (Hz)'),
-  n_sources: count('Sorgenti per modalità', 'Treni di Poisson indipendenti per ciascuno stimolo.'),
-  aud_latency_ms: nonNegative('Latenza uditiva (ms)', "Ritardo del primo spike dall'inizio del trial."),
-  vis_latency_ms: nonNegative('Latenza visiva (ms)', "Ritardo del primo spike dall'inizio del trial."),
+  vis_rate: nonNegative('Stimolo visivo (Hz)', ALSO_IN_TRAINING),
+  aud_rate: nonNegative('Stimolo uditivo (Hz)', ALSO_IN_TRAINING),
+  n_sources: count('Sorgenti per modalità', `Treni di Poisson indipendenti per ciascuno stimolo. ${ALSO_IN_TRAINING}`),
+  aud_latency_ms: nonNegative('Latenza uditiva (ms)', MSI_LATENCY_HELP),
+  vis_latency_ms: nonNegative('Latenza visiva (ms)', MSI_LATENCY_HELP),
   mf_dcn_weight_low: nonNegative('Peso stimolo→DCN_A, minimo', 'I pesi sono estratti uniformemente tra minimo e massimo.'),
   mf_dcn_weight_high: nonNegative('Peso stimolo→DCN_A, massimo'),
   bin_ms: positive('Bin della frequenza (ms)'),
@@ -82,8 +90,11 @@ const MSI_META: Record<string, FieldMeta> = {
 
 const CONDITIONING_META: Record<string, FieldMeta> = {
   seed: SEED,
-  n_train: count('Trial di addestramento', 'Alternano stimolo uditivo e visivo.'),
+  n_train: count('Trial di addestramento', 'Metà uditivi e metà visivi, in ordine casuale.'),
   n_test: count('Trial di test per condizione', 'Le condizioni sono tre: uditiva, visiva, audiovisiva.'),
+  aud_latency_ms: nonNegative('Latenza uditiva (ms)', "Ritardo del primo spike dall'inizio del trial."),
+  vis_latency_ms: nonNegative('Latenza visiva (ms)', "Ritardo del primo spike dall'inizio del trial."),
+  rt_smooth_bins: count('Bin della media mobile', 'Finestra, in bin da 5 ms, con cui si liscia la frequenza prima di cercare la risposta.'),
 };
 
 const DECISION_META: Record<string, FieldMeta> = {
@@ -92,15 +103,23 @@ const DECISION_META: Record<string, FieldMeta> = {
     options: [
       { value: 'auditory', label: 'Uditiva' },
       { value: 'visual', label: 'Visiva' },
-      { value: 'audiovisual', label: 'Audiovisiva' },
+      { value: 'audiovisual', label: 'Audiovisiva, sulla stessa rete' },
+      { value: 'dual', label: 'Due reti, una uditiva e una visiva: risponde la più veloce' },
     ],
+    help: 'Con due reti indipendenti la risposta audiovisiva è quella del modello a gara: è il modello senza cervelletto di Cavadini et al. (2025).',
   },
   num_trials: count('Numero di trial'),
   rate: nonNegative('Frequenza dello stimolo (Hz)'),
   number_of_neurons: count('Afferenze sensoriali per lato'),
   stimulus_window_ms: positive('Fine dello stimolo (ms)', 'Lo stimolo è attivo dalla latenza della modalità fino a questo istante del trial.'),
   trial_slot_ms: positive('Durata del trial (ms)'),
-  threshold: positive('Soglia di risposta (Hz)', 'La risposta è il primo superamento della soglia da parte della frequenza di popolazione.'),
+  threshold: positive(
+    'Soglia di risposta (Hz)',
+    'La risposta è il primo superamento della soglia da parte della frequenza di una delle due popolazioni; è corretta se è quella stimolata.',
+  ),
+  rt_smooth_bins: count('Bin della media mobile', 'Finestra, in bin da 5 ms, con cui si liscia la frequenza prima di cercare la risposta.'),
+  auditory_latency_ms: nonNegative('Latenza uditiva (ms)', "Ritardo del primo spike dall'inizio del trial."),
+  visual_latency_ms: nonNegative('Latenza visiva (ms)', "Ritardo del primo spike dall'inizio del trial."),
   seed: SEED,
   order: count('Scala della rete', 'Neuroni: 2 × scala per ogni popolazione eccitatoria, 1 × scala per quella inibitoria.'),
 };
@@ -133,7 +152,10 @@ export const TRIAL_META = {
   iti_min_ms: nonNegative('Intervallo minimo (ms)'),
   iti_max_ms: nonNegative('Intervallo massimo (ms)'),
   weight: nonNegative('Peso'),
-  decision_margin: nonNegative('Margine di decisione (spike)', 'Differenza minima di spike tra A e B perché il trial abbia un vincitore.'),
+  decision_margin: nonNegative(
+    'Margine di decisione (spike)',
+    'Il trial ha un vincitore solo se la differenza di spike tra A e B è strettamente maggiore del margine.',
+  ),
   threshold: positive('Soglia (Hz)'),
   bin_size: positive('Bin (ms)'),
 } satisfies Record<string, FieldMeta>;
@@ -154,9 +176,9 @@ export function fieldError(meta: FieldMeta, value: unknown): string | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 'Valore obbligatorio.';
   if (meta.integer && !Number.isInteger(value)) return 'Deve essere un numero intero.';
   if (meta.min !== undefined && (meta.exclusive ? value <= meta.min : value < meta.min)) {
-    return meta.exclusive ? `Deve essere maggiore di ${meta.min}.` : `Il minimo è ${meta.min}.`;
+    return meta.exclusive ? `Deve essere maggiore di ${formatValue(meta.min)}.` : `Il minimo è ${formatValue(meta.min)}.`;
   }
-  if (meta.max !== undefined && value > meta.max) return `Il massimo è ${meta.max}.`;
+  if (meta.max !== undefined && value > meta.max) return `Il massimo è ${formatValue(meta.max)}.`;
   return null;
 }
 
@@ -219,7 +241,10 @@ export function validateBuiltin(kind: BuiltinKind, draft: ExperimentParams, popu
   const report = new Report();
   if (kind === 'cerebellum_msi_race') {
     const missing = missingMsiPopulations(populations);
-    if (missing.length) report.add(`Alla rete mancano le popolazioni richieste dall'esperimento: ${missing.join(', ')}.`);
+    if (missing.length) {
+      const what = missing.length === 1 ? 'manca una popolazione richiesta' : 'mancano popolazioni richieste';
+      report.add(`Alla rete ${what} dall'esperimento: ${missing.join(', ')}.`);
+    }
   }
   builtinSection(report, BUILTIN_DEFAULTS[kind], draft, BUILTIN_META[kind], '');
   if (exceeds(draft['test']?.mf_dcn_weight_low, draft['test']?.mf_dcn_weight_high)) {
@@ -240,19 +265,22 @@ function deviceSize(device: DeviceDraft, stimuli: Stimulus[] | null): number | u
   return 1;
 }
 
+const INVALID_EXTRA = 'gli altri parametri non sono un oggetto JSON valido.';
+
 function validateInputs(report: Report, inputs: InputsDraft, ctx: ValidationContext, resolution: number): void {
-  const populationSize = new Map(ctx.populations.map((population) => [population.id, population.size]));
+  const populations = new Map(ctx.populations.map((population) => [population.id, population]));
   const idCount = new Map<string, number>();
   for (const device of inputs.devices) idCount.set(device.id, (idCount.get(device.id) ?? 0) + 1);
   for (const [id, uses] of idCount) {
-    if (id && uses > 1) report.add(`L'identificatore ${id} è usato da ${uses} dispositivi.`);
+    if (id && uses > 1) report.add(`L'ID ${id} è usato da ${uses} dispositivi.`);
   }
 
   inputs.devices.forEach((device, index) => {
     const where = `Dispositivo ${device.id || index + 1}: `;
-    if (!device.id) report.add(`${where}manca l'identificatore.`);
-    else if (!/^\w+$/.test(device.id)) report.add(`${where}l'identificatore ammette solo lettere, cifre e _.`);
+    if (!device.id) report.add(`${where}manca l'ID.`);
+    else if (!/^\w+$/.test(device.id)) report.add(`${where}l'ID ammette solo lettere, cifre e _.`);
     if (!device.model) report.add(`${where}scegli il modello.`);
+    if (device.invalidExtra !== undefined) report.add(`${where}${INVALID_EXTRA}`);
 
     for (const [key, value] of Object.entries(device.params)) {
       if (key === 'stimulus_id') {
@@ -270,23 +298,35 @@ function validateInputs(report: Report, inputs: InputsDraft, ctx: ValidationCont
     const where = `Connessione ${index + 1}: `;
     const device = connection.device && inputs.devices.includes(connection.device) ? connection.device : null;
     if (!device) report.add(`${where}scegli il dispositivo sorgente.`);
+    const target = populations.get(connection.target);
     if (!connection.target) report.add(`${where}scegli la popolazione di destinazione.`);
-    else if (!populationSize.has(connection.target)) report.add(`${where}la popolazione ${connection.target} non esiste nella rete.`);
+    else if (!target) report.add(`${where}la popolazione ${connection.target} non esiste nella rete.`);
+    else if (isStimulusModel(target.neuron_model)) {
+      report.add(`${where}la popolazione ${connection.target} è una sorgente di stimolo: scegli una popolazione di neuroni.`);
+    }
 
     report.field(CONNECTION_PARAM_META['weight'], connection.params['weight'], where);
     report.field(CONNECTION_PARAM_META['delay'], connection.params['delay'], where);
     if (exceeds(resolution, connection.params['delay'])) {
-      report.add(`${where}il ritardo non può essere inferiore alla risoluzione (${resolution} ms).`);
+      report.add(`${where}il ritardo non può essere inferiore alla risoluzione (${formatValue(resolution)} ms).`);
     }
     const ruleParam = RULE_PARAMS[connection.rule];
     if (ruleParam) report.field(CONNECTION_PARAM_META[ruleParam.key], connection.params[ruleParam.key], where);
+    if (connection.invalidExtra !== undefined) report.add(`${where}${INVALID_EXTRA}`);
 
     const sources = device ? deviceSize(device, ctx.stimuli) : undefined;
-    const targets = populationSize.get(connection.target);
+    const targets = target?.size;
     if (connection.rule === 'one_to_one' && sources !== undefined && targets !== undefined && sources !== targets) {
-      report.add(`${where}one_to_one richiede lo stesso numero di sorgenti (${sources}) e di neuroni (${targets}).`);
+      report.add(
+        `${where}one_to_one richiede lo stesso numero di sorgenti (${formatValue(sources)}) e di neuroni (${formatValue(targets)}).`,
+      );
     }
   });
+}
+
+/** Le popolazioni che il simulatore registra: solo queste possono entrare in una coppia differenziale. */
+function recordedIds(populations: Population[]): Set<string> {
+  return new Set(populations.filter((population) => !isStimulusModel(population.neuron_model)).map((population) => population.id));
 }
 
 function validatePlots(report: Report, plots: DifferentialPlot[], populationIds: Set<string>): void {
@@ -338,7 +378,7 @@ export function validateTrialProtocol(draft: TrialProtocolDraft, ctx: Validation
   }
   validateKernel(report, draft);
 
-  validatePlots(report, draft.differential_plots, populationIds);
+  validatePlots(report, draft.differential_plots, recordedIds(ctx.populations));
   report.field(TRIAL_META.decision_margin, draft.decision_margin);
   if (draft.response_cdf.enabled) {
     report.field(TRIAL_META.threshold, draft.response_cdf.threshold, 'Tempi di risposta, ');
@@ -347,9 +387,14 @@ export function validateTrialProtocol(draft: TrialProtocolDraft, ctx: Validation
   if (draft.race_model.enabled) {
     const unknown = draft.race_model.populations.filter((id) => !populationIds.has(id));
     if (!draft.race_model.populations.length) report.add('Race Model Inequality: scegli almeno una popolazione.');
-    if (unknown.length) report.add(`Race Model Inequality: ${unknown.join(', ')} non è nella rete.`);
+    if (unknown.length) {
+      report.add(`Race Model Inequality: ${unknown.join(', ')} ${unknown.length === 1 ? 'non è' : 'non sono'} nella rete.`);
+    }
     const missing = ['V', 'A', 'AV'].filter((label) => !labels.includes(label));
-    if (missing.length) report.add(`Race Model Inequality: mancano le condizioni con etichetta ${missing.join(', ')}.`);
+    if (missing.length) {
+      const what = missing.length === 1 ? 'manca la condizione' : 'mancano le condizioni';
+      report.add(`Race Model Inequality: ${what} con etichetta ${missing.join(', ')}.`);
+    }
   }
   return report.errors;
 }
@@ -360,7 +405,7 @@ export function validateContinuous(draft: ContinuousDraft, ctx: ValidationContex
   if (draft.training) report.field(CONTINUOUS_META.train_duration_ms, draft.train_duration_ms);
   report.field(CONTINUOUS_META.test_duration_ms, draft.test_duration_ms);
   validateKernel(report, draft);
-  validatePlots(report, draft.differential_plots, new Set(ctx.populations.map((population) => population.id)));
+  validatePlots(report, draft.differential_plots, recordedIds(ctx.populations));
   return report.errors;
 }
 
@@ -375,7 +420,7 @@ export function validateState(state: RunnerState, ctx: ValidationContext): strin
   const seconds = estimateDurationMs(buildParams(state)) / 1000;
   if (seconds > MAX_SIMULATION_MS / 1000) {
     errors.push(
-      `Il tempo biologico (${Math.round(seconds)} s) supera il massimo di ${MAX_SIMULATION_MS / 1000} s per simulazione.`,
+      `Il tempo biologico (${formatValue(Math.round(seconds))} s) supera il massimo di ${formatValue(MAX_SIMULATION_MS / 1000)} s per simulazione.`,
     );
   }
   return errors;

@@ -5,11 +5,10 @@ import { RouterLink } from '@angular/router';
 import { Network } from '../../../core/models';
 import { NetworkService } from '../../../core/services/network.service';
 import { apiErrorMessage } from '../../../core/utils/errors';
+import { formatNumber } from '../../../core/utils/format';
 import { countNeurons, countSynapses } from '../../../core/utils/topology';
 import { ConfirmButtonComponent } from '../../../shared/components/confirm-button/confirm-button.component';
 import { SimulationListComponent } from './simulation-list.component';
-
-const INTEGER = new Intl.NumberFormat('it-IT');
 
 @Component({
   selector: 'app-dashboard',
@@ -34,9 +33,9 @@ const INTEGER = new Intl.NumberFormat('it-IT');
                 <thead>
                   <tr>
                     <th scope="col">Nome</th>
-                    <th scope="col" class="!text-right">Popolazioni</th>
-                    <th scope="col" class="!text-right">Neuroni</th>
-                    <th scope="col" class="!text-right">Sinapsi</th>
+                    <th scope="col" class="text-right">Popolazioni</th>
+                    <th scope="col" class="text-right">Neuroni</th>
+                    <th scope="col" class="text-right">Sinapsi</th>
                     <th scope="col" class="hidden whitespace-nowrap lg:table-cell">Modificata il</th>
                     <th scope="col"><span class="sr-only">Azioni</span></th>
                   </tr>
@@ -112,8 +111,8 @@ export class DashboardComponent {
       return {
         network,
         populations: topology?.populations?.length ?? 0,
-        neurons: INTEGER.format(countNeurons(topology?.populations)),
-        synapses: INTEGER.format(countSynapses(topology?.populations, topology?.projections)),
+        neurons: formatNumber(countNeurons(topology?.populations)),
+        synapses: formatNumber(countSynapses(topology?.populations, topology?.projections)),
       };
     }),
   );

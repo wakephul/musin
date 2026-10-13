@@ -5,11 +5,10 @@ import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Stimulus } from '../../core/models';
 import { StimulusService } from '../../core/services/stimulus.service';
 import { apiErrorMessage } from '../../core/utils/errors';
+import { formatNumber } from '../../core/utils/format';
 import { ConfirmButtonComponent } from '../../shared/components/confirm-button/confirm-button.component';
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
-const INTEGER = new Intl.NumberFormat('it-IT');
-const DECIMAL = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 1 });
 
 // Gli esempi stanno qui perché le graffe nel testo di un template Angular vanno evitate.
 const FORMATS = [
@@ -34,10 +33,6 @@ const FORMATS = [
     example: 'senders  [1, 1, 2]\ntimes    [12.5, 40.1, 8.0]',
   },
 ];
-
-function format(value: number | null | undefined, formatter: Intl.NumberFormat, unit = ''): string {
-  return value == null ? 'n/d' : formatter.format(value) + unit;
-}
 
 @Component({
   selector: 'app-stimuli',
@@ -87,7 +82,7 @@ function format(value: number | null | undefined, formatter: Intl.NumberFormat, 
           </button>
 
           <details class="mt-4 border-t border-line pt-3">
-            <summary class="cursor-pointer text-sm text-muted hover:text-ink">Formati accettati</summary>
+            <summary>Formati accettati</summary>
             <p class="mt-3 text-sm">
               Tempi in millisecondi, arrotondati a 0,1 ms; i tempi minori o uguali a 0 vengono scartati. Nei formati a eventi
               ogni sender distinto diventa un treno. Al massimo 5000 treni e 20 MB per file.
@@ -95,7 +90,7 @@ function format(value: number | null | undefined, formatter: Intl.NumberFormat, 
             <div class="mt-3 grid gap-4 md:grid-cols-2">
               @for (item of formats; track item.title) {
                 <div>
-                  <h3 class="text-sm font-medium">{{ item.title }}</h3>
+                  <h3 class="subsection-title">{{ item.title }}</h3>
                   <p class="help mb-1.5">{{ item.note }}</p>
                   <pre class="code-block">{{ item.example }}</pre>
                 </div>
@@ -119,9 +114,9 @@ function format(value: number | null | undefined, formatter: Intl.NumberFormat, 
                 <thead>
                   <tr>
                     <th scope="col">Nome</th>
-                    <th scope="col" class="!text-right">Treni</th>
-                    <th scope="col" class="!text-right">Spike</th>
-                    <th scope="col" class="!text-right">Durata</th>
+                    <th scope="col" class="text-right">Treni</th>
+                    <th scope="col" class="text-right">Spike</th>
+                    <th scope="col" class="text-right">Durata</th>
                     <th scope="col" class="whitespace-nowrap">File di origine</th>
                     <th scope="col" class="hidden whitespace-nowrap lg:table-cell">Caricato il</th>
                     <th scope="col"><span class="sr-only">Azioni</span></th>
@@ -188,10 +183,10 @@ export class StimuliComponent {
   protected rows = computed(() =>
     (this.stimuli() ?? []).map((stimulus) => ({
       stimulus,
-      trains: format(stimulus.definition?.n_trains, INTEGER),
-      spikes: format(stimulus.definition?.n_spikes, INTEGER),
-      duration: format(stimulus.definition?.duration_ms, DECIMAL, ' ms'),
-      source: stimulus.definition?.source_filename ?? 'n/d',
+      trains: formatNumber(stimulus.definition?.n_trains),
+      spikes: formatNumber(stimulus.definition?.n_spikes),
+      duration: stimulus.definition ? `${formatNumber(stimulus.definition.duration_ms, 1, 0)} ms` : 'n.d.',
+      source: stimulus.definition?.source_filename ?? 'n.d.',
     })),
   );
 

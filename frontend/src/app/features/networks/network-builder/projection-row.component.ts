@@ -2,17 +2,11 @@ import { Component, DestroyRef, OnInit, inject, input, output } from '@angular/c
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ReactiveFormsModule } from '@angular/forms';
 
+import { CONNECTION_RULES, RULE_PARAMS, RuleParamKey } from '../../../core/data/connection-rules';
 import { ModelInfo } from '../../../core/models';
+import { JsonObject } from '../../../core/utils/json';
 import { ProjectionGroup } from './network-form.controls';
-import {
-  CONNECTION_RULES,
-  DEGREE_KEY,
-  DegreeKey,
-  JsonObject,
-  PopulationForm,
-  ProjectionProblems,
-  paramsAfterModelChange,
-} from './network-form.mapping';
+import { PopulationForm, ProjectionProblems, paramsAfterModelChange } from './network-form.mapping';
 
 interface DegreeField {
   label: string;
@@ -22,9 +16,9 @@ interface DegreeField {
   step: string;
 }
 
-const DEGREE_FIELDS: Record<DegreeKey, DegreeField> = {
-  indegree: { label: 'Indegree', help: 'Per neurone di destinazione.', min: 1, max: null, step: '1' },
-  outdegree: { label: 'Outdegree', help: 'Per neurone sorgente.', min: 1, max: null, step: '1' },
+const DEGREE_FIELDS: Record<RuleParamKey, DegreeField> = {
+  indegree: { label: 'indegree', help: 'Per neurone di destinazione.', min: 1, max: null, step: '1' },
+  outdegree: { label: 'outdegree', help: 'Per neurone sorgente.', min: 1, max: null, step: '1' },
   p: { label: 'p', help: 'Probabilità per coppia, fino a 1.', min: 0, max: 1, step: 'any' },
 };
 
@@ -36,7 +30,7 @@ const DEGREE_FIELDS: Record<DegreeKey, DegreeField> = {
   template: `
     <div class="space-y-3 px-4 py-3" [formGroup]="group()">
       <div class="flex items-center justify-between gap-2">
-        <h3 class="text-sm font-medium">Proiezione {{ index() + 1 }}</h3>
+        <h3 class="subsection-title">Proiezione {{ index() + 1 }}</h3>
         <button type="button" class="btn btn-quiet btn-sm" (click)="remove.emit()">Rimuovi</button>
       </div>
 
@@ -197,7 +191,7 @@ export class ProjectionRowComponent implements OnInit {
   }
 
   protected degreeField(): DegreeField | null {
-    const key = DEGREE_KEY[this.group().controls.rule.value];
+    const key = RULE_PARAMS[this.group().controls.rule.value]?.key;
     return key ? DEGREE_FIELDS[key] : null;
   }
 

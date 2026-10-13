@@ -4,22 +4,22 @@ import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
 import { RouterLink } from '@angular/router';
 import { EMPTY, Subject, catchError, switchMap, timer } from 'rxjs';
 
-import { EXPERIMENT_LABELS, STATUS_LABELS, Simulation, SimulationStatus } from '../../../core/models';
+import {
+  EXPERIMENT_LABELS,
+  OWN_NETWORK_LABEL,
+  STATUS_CLASSES,
+  STATUS_LABELS,
+  Simulation,
+  SimulationStatus,
+  simulatesSelectedNetwork,
+} from '../../../core/models';
 import { SimulationService } from '../../../core/services/simulation.service';
 import { apiErrorMessage } from '../../../core/utils/errors';
+import { formatNumber, plural } from '../../../core/utils/format';
 import { ConfirmButtonComponent } from '../../../shared/components/confirm-button/confirm-button.component';
 
 const PAGE_SIZE = 20;
 const REFRESH_MS = 5000;
-
-// Classi scritte per esteso: Tailwind tiene solo quelle che trova nei sorgenti.
-const STATUS_CLASS: Record<SimulationStatus, string> = {
-  PENDING: 'status status-pending',
-  RUNNING: 'status status-running',
-  COMPLETED: 'status status-completed',
-  FAILED: 'status status-failed',
-  ABORTED: 'status',
-};
 
 const FILTERS: { value: SimulationStatus | null; label: string }[] = [
   { value: null, label: 'Tutte' },
@@ -29,10 +29,6 @@ const FILTERS: { value: SimulationStatus | null; label: string }[] = [
   { value: 'FAILED', label: 'Fallite' },
   { value: 'ABORTED', label: 'Interrotte' },
 ];
-
-function plural(count: number, one: string, many: string): string {
-  return `${count} ${count === 1 ? one : many}`;
-}
 
 @Component({
   selector: 'app-simulation-list',
@@ -91,7 +87,11 @@ function plural(count: number, one: string, many: string): string {
                       }
                     </td>
                     <!-- w-full + max-w-0: la colonna prende lo spazio che resta e tronca invece di allargare la tabella -->
-                    <td class="w-full max-w-0 truncate" [title]="sim.network_name ?? ''">{{ sim.network_name ?? 'n/d' }}</td>
+                    @if (simulatesNetwork(sim)) {
+                      <td class="w-full max-w-0 truncate" [title]="sim.network_name ?? ''">{{ sim.network_name ?? 'n.d.' }}</td>
+                    } @else {
+                      <td class="w-full max-w-0 truncate text-muted">{{ ownNetworkLabel }}</td>
+                    }
                     <td class="whitespace-nowrap">
                       <span [class]="statusClass[sim.status]">{{ statusLabels[sim.status] }}</span>
                       @if (sim.status === 'FAILED' && sim.error_message) {
@@ -144,7 +144,8 @@ export class SimulationListComponent {
 
   protected readonly filters = FILTERS;
   protected readonly statusLabels = STATUS_LABELS;
-  protected readonly statusClass = STATUS_CLASS;
+  protected readonly statusClass = STATUS_CLASSES;
+  protected readonly ownNetworkLabel = OWN_NETWORK_LABEL;
   protected readonly experimentLabels: Record<string, string> = EXPERIMENT_LABELS;
 
   /** `null` durante il primo caricamento, al cambio di filtro e dopo un errore. */
@@ -160,7 +161,7 @@ export class SimulationListComponent {
   protected range = computed(() => {
     const first = (this.page() - 1) * PAGE_SIZE + 1;
     const last = first + (this.simulations()?.length ?? 0) - 1;
-    return `${first}–${last} di ${this.total()}`;
+    return `${formatNumber(first)}–${formatNumber(last)} di ${formatNumber(this.total())}`;
   });
 
   protected summary = computed(() => {
@@ -174,8 +175,8 @@ export class SimulationListComponent {
         plural(counts.COMPLETED, 'completata', 'completate'),
         plural(counts.FAILED, 'fallita', 'fallite'),
         plural(counts.ABORTED, 'interrotta', 'interrotte'),
-        `${counts.RUNNING} in corso`,
-        `${counts.PENDING} in coda`,
+        `${formatNumber(counts.RUNNING)} in corso`,
+        `${formatNumber(counts.PENDING)} in coda`,
       ].join(', ')
     );
   });
@@ -228,6 +229,10 @@ export class SimulationListComponent {
       .subscribe(() => this.request.next());
 
     this.request.next();
+  }
+
+  protected simulatesNetwork(simulation: Simulation): boolean {
+    return simulatesSelectedNetwork(simulation.experiment);
   }
 
   reload(): void {

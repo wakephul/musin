@@ -1,7 +1,8 @@
-import { Component, input } from '@angular/core';
+import { Component, computed, input } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
 import { Population } from '../../../core/models';
+import { isStimulusModel } from '../../../core/utils/topology';
 import { DifferentialPlot } from './experiment-params';
 
 /** Coppie di popolazioni da confrontare (A − B). */
@@ -13,10 +14,10 @@ import { DifferentialPlot } from './experiment-params';
   template: `
     <div class="flex items-start justify-between gap-4">
       <div class="min-w-0">
-        <h3 class="text-sm font-semibold">Coppie differenziali</h3>
+        <h3 class="subsection-title">Coppie differenziali</h3>
         <p class="help">{{ hint() }}</p>
       </div>
-      <button type="button" class="btn btn-sm" [disabled]="populations().length < 2" (click)="add()">Aggiungi coppia</button>
+      <button type="button" class="btn btn-sm" [disabled]="recorded().length < 2" (click)="add()">Aggiungi coppia</button>
     </div>
     @for (plot of plots(); track plot; let i = $index) {
       <div class="mt-3 flex flex-wrap items-start gap-3">
@@ -24,7 +25,7 @@ import { DifferentialPlot } from './experiment-params';
           <label class="label" [for]="'pair-' + i + '-a'">Popolazione A</label>
           <select class="input num" [id]="'pair-' + i + '-a'" [(ngModel)]="plot.pop_a">
             <option value="" disabled>Scegli</option>
-            @for (population of populations(); track population.id) {
+            @for (population of recorded(); track population.id) {
               <option [value]="population.id">{{ population.id }}</option>
             }
           </select>
@@ -33,7 +34,7 @@ import { DifferentialPlot } from './experiment-params';
           <label class="label" [for]="'pair-' + i + '-b'">Popolazione B</label>
           <select class="input num" [id]="'pair-' + i + '-b'" [(ngModel)]="plot.pop_b">
             <option value="" disabled>Scegli</option>
-            @for (population of populations(); track population.id) {
+            @for (population of recorded(); track population.id) {
               <option [value]="population.id">{{ population.id }}</option>
             }
           </select>
@@ -58,6 +59,9 @@ export class DifferentialPlotsComponent {
   readonly plots = input.required<DifferentialPlot[]>();
   readonly populations = input.required<Population[]>();
   readonly hint = input.required<string>();
+
+  /** Generatori e sorgenti di stimolo non vengono registrati: non hanno una frequenza da confrontare. */
+  protected recorded = computed(() => this.populations().filter((population) => !isStimulusModel(population.neuron_model)));
 
   protected add(): void {
     this.plots().push({ pop_a: '', pop_b: '', label: '' });

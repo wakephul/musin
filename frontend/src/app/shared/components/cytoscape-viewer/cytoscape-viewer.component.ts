@@ -1,6 +1,8 @@
 import { AfterViewInit, Component, DestroyRef, ElementRef, NgZone, effect, inject, input, viewChild } from '@angular/core';
 import cytoscape from 'cytoscape';
 
+import { formatNumber, formatValue } from '../../../core/utils/format';
+
 /** Ciò che il grafo legge di una popolazione. `label` sostituisce l'id come testo del nodo. */
 export interface GraphPopulation {
   id: string;
@@ -34,23 +36,21 @@ const LAYOUT: cytoscape.BreadthFirstLayoutOptions = {
   spacingFactor: 1.4,
 };
 
-const integer = new Intl.NumberFormat('it-IT');
-
 function nodeData(pop: GraphPopulation) {
   const size = Number(pop.size) || 0;
   return {
     id: `n:${pop.id}`,
-    label: `${(pop.label ?? pop.id) || '(senza ID)'}\n${size > 0 ? integer.format(size) : ''}`.trim(),
+    label: `${(pop.label ?? pop.id) || '(senza ID)'}\n${size > 0 ? formatNumber(size) : ''}`.trim(),
     diameter: Math.round(40 + 9 * Math.log10(Math.max(size, 1))),
   };
 }
 
 function edgeLabel(rule: string, params: Record<string, unknown>): string {
   const withDegree = (prefix: string, value: unknown) =>
-    typeof value === 'number' || typeof value === 'string' ? `${prefix} ${value}` : prefix;
+    typeof value === 'number' ? `${prefix} ${formatValue(value)}` : typeof value === 'string' ? `${prefix} ${value}` : prefix;
   switch (rule) {
     case 'all_to_all':
-      return 'all';
+      return 'tutti';
     case 'one_to_one':
       return '1:1';
     case 'fixed_indegree':

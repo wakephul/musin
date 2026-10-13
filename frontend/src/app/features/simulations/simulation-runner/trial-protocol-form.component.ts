@@ -59,7 +59,7 @@ import { ParamFieldComponent } from './param-field.component';
                     [checked]="condition.devices.includes(device)"
                     (change)="toggleDevice(condition, device)"
                   />
-                  <span class="num">{{ device.id || 'senza identificatore' }}</span>
+                  <span class="num">{{ device.id || 'senza ID' }}</span>
                 </label>
               } @empty {
                 <span class="text-muted">Nessun dispositivo definito.</span>
@@ -145,7 +145,7 @@ import { ParamFieldComponent } from './param-field.component';
         </div>
 
         <div>
-          <label class="inline-flex items-center gap-2 text-sm font-semibold">
+          <label class="subsection-title inline-flex items-center gap-2">
             <input type="checkbox" class="checkbox" [(ngModel)]="draft().response_cdf.enabled" />
             Distribuzione dei tempi di risposta
           </label>
@@ -162,7 +162,7 @@ import { ParamFieldComponent } from './param-field.component';
         </div>
 
         <div>
-          <label class="inline-flex items-center gap-2 text-sm font-semibold">
+          <label class="subsection-title inline-flex items-center gap-2">
             <input type="checkbox" class="checkbox" [(ngModel)]="draft().race_model.enabled" />
             Race Model Inequality
           </label>

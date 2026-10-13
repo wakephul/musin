@@ -1,7 +1,7 @@
-import { Component, input, signal } from '@angular/core';
+import { Component, computed, input, signal } from '@angular/core';
 
 /**
- * Grafico prodotto dal worker. L'URL è firmato e scade dopo un'ora:
+ * Grafico prodotto dal simulatore. L'URL è firmato e scade dopo un'ora:
  * se l'immagine non si carica resta un testo al posto dell'icona rotta.
  */
 @Component({
@@ -14,7 +14,7 @@ import { Component, input, signal } from '@angular/core';
         <p class="text-xs text-muted">Immagine non disponibile, ricarica la pagina.</p>
       } @else {
         <a [href]="url()" target="_blank" rel="noopener" title="Apri a dimensione piena in una nuova scheda" class="block">
-          <img class="figure" [src]="url()" [alt]="alt()" loading="lazy" (error)="failed.set(true)" />
+          <img class="figure" [src]="url()" [alt]="alt()" loading="lazy" (error)="failedUrl.set(url())" />
         </a>
       }
       @if (caption()) {
@@ -28,5 +28,7 @@ export class ResultFigureComponent {
   readonly alt = input.required<string>();
   readonly caption = input<string>();
 
-  protected failed = signal(false);
+  /** L'errore vale per l'URL che l'ha dato: con un link rinnovato l'immagine si riprova. */
+  protected failedUrl = signal<string | null>(null);
+  protected failed = computed(() => this.failedUrl() === this.url());
 }

@@ -1,18 +1,13 @@
 import { Component, computed, input } from '@angular/core';
 
 import { AccuracyMetric } from '../../../core/models';
+import { formatNumber } from '../../../core/utils/format';
 import { Fact, FactsComponent } from './facts.component';
 import { ItNumPipe } from './it-num.pipe';
-import { formatNumber, winnerLabel } from './results-helpers';
+import { conditionLabel, winnerLabel } from './results-helpers';
 
-interface Detection {
-  hits: number;
-  misses: number;
-  false_alarms: number;
-  correct_rejections: number;
-}
-
-type Metric = AccuracyMetric & { detection?: Detection | null };
+type Detection = NonNullable<AccuracyMetric['detection']>;
+type Metric = Omit<AccuracyMetric, 'detection'> & { detection?: Detection | null };
 
 @Component({
   selector: 'app-accuracy-section',
@@ -23,7 +18,7 @@ type Metric = AccuracyMetric & { detection?: Detection | null };
     @for (view of views(); track $index) {
       <article class="panel">
         <header class="panel-header">
-          <h3 class="font-medium">{{ view.metric.comparison }}</h3>
+          <h3 class="subsection-title">{{ view.metric.comparison }}</h3>
         </header>
         <div class="panel-body space-y-3">
           @if (view.metric.total_valid_trials > 0) {
@@ -49,7 +44,7 @@ type Metric = AccuracyMetric & { detection?: Detection | null };
 
           @if (view.rows.length) {
             <details>
-              <summary class="cursor-pointer text-sm font-medium">Dettaglio dei trial ({{ view.rows.length }})</summary>
+              <summary>Dettaglio dei trial ({{ view.rows.length }})</summary>
               <div class="mt-3 overflow-x-auto rounded-md border border-line">
                 <table class="table-list">
                   <thead>
@@ -67,11 +62,13 @@ type Metric = AccuracyMetric & { detection?: Detection | null };
                     @for (row of view.rows; track $index) {
                       <tr>
                         <td class="num text-right">{{ row.trial }}</td>
-                        <td class="num">{{ row.condition }}</td>
+                        <td [class.num]="row.condition.isId">{{ row.condition.text }}</td>
                         <td [class.num]="row.stimuli" [class.text-muted]="!row.stimuli">{{ row.stimuli || 'nessuno' }}</td>
                         <td [class.num]="row.expected.isId" [class.text-muted]="!row.expected.isId">{{ row.expected.text }}</td>
                         <td [class.num]="row.actual.isId" [class.text-muted]="!row.actual.isId">{{ row.actual.text }}</td>
-                        <td class="num text-right">{{ row.evidence | itNum: 2 : 0 }}</td>
+                        <td class="num text-right" [class.text-muted]="row.evidence === null">
+                          {{ row.evidence | itNum: 2 : 0 }}
+                        </td>
                         <td>
                           @switch (row.correct) {
                             @case (true) {
@@ -111,11 +108,12 @@ export class AccuracySectionComponent {
         unevaluated: trials.filter((trial) => trial.is_correct == null).length,
         rows: trials.map((trial) => ({
           trial: trial.trial,
-          condition: trial.condition_label ?? '',
+          condition: conditionCell(trial.condition_label ?? ''),
           stimuli: (trial.active_stimuli ?? []).join(', '),
           expected: winnerLabel(trial.expected_winner),
           actual: winnerLabel(trial.actual_winner),
-          evidence: trial.net_evidence,
+          // null quando il simulatore non l'ha calcolata: va scritto "n.d.", non 0.
+          evidence: trial.net_evidence ?? null,
           correct: trial.is_correct ?? null,
         })),
       };
@@ -123,10 +121,20 @@ export class AccuracySectionComponent {
   );
 }
 
+/** `auditory`, `visual` e `audiovisual` si scrivono a parole; le altre etichette (V, A, AV, quelle dell'utente) restano come sono. */
+function conditionCell(label: string): { text: string; isId: boolean } {
+  const text = conditionLabel(label);
+  return { text, isId: text === label };
+}
+
 function detectionFacts(detection: Detection): Fact[] {
   return [
     { label: 'Rilevazioni corrette (hit)', value: formatNumber(detection.hits) },
     { label: 'Mancate rilevazioni (miss)', value: formatNumber(detection.misses) },
+    // Senza questa voce i conteggi non tornano con il numero di trial; i risultati più vecchi non ce l'hanno.
+    ...(detection.wrong_pathway == null
+      ? []
+      : [{ label: 'Risposte sulla via sbagliata', value: formatNumber(detection.wrong_pathway) }]),
     { label: 'Falsi allarmi', value: formatNumber(detection.false_alarms) },
     { label: 'Rifiuti corretti', value: formatNumber(detection.correct_rejections) },
   ];

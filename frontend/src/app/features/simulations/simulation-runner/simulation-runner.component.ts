@@ -9,6 +9,7 @@ import { NetworkService } from '../../../core/services/network.service';
 import { SimulationService } from '../../../core/services/simulation.service';
 import { StimulusService } from '../../../core/services/stimulus.service';
 import { apiErrorMessage } from '../../../core/utils/errors';
+import { formatNumber, plural } from '../../../core/utils/format';
 import { countNeurons } from '../../../core/utils/topology';
 import { ConditioningFormComponent } from './conditioning-form.component';
 import { ContinuousFormComponent } from './continuous-form.component';
@@ -21,6 +22,7 @@ import {
   buildParams,
   estimateDurationMs,
   experimentKind,
+  inheritedParams,
   stateFromParams,
 } from './experiment-params';
 import { missingMsiPopulations, validateState } from './experiment-validation';
@@ -30,18 +32,18 @@ import { TrialProtocolFormComponent } from './trial-protocol-form.component';
 const DESCRIPTIONS: Record<BuiltinKind, string> = {
   cerebellum_msi_race:
     "L'addestramento associa lo stimolo sensoriale a un segnale di insegnamento su IO_A e deprime le sinapsi GR→PC_A " +
-    '(LTD controllata dalle fibre rampicanti). Il test presenta trial V, A, AV e catch, legge i tempi di reazione dal DCN ' +
+    '(LTD controllata dalle fibre rampicanti). Il test presenta trial V, A, AV e catch, legge i tempi di risposta dal DCN ' +
     'e calcola la Race Model Inequality (Miller 1982) sulle loro distribuzioni cumulative.',
   cerebellum_conditioning:
-    "Addestra le vie A e B di una rete cerebellare con stimoli uditivi o visivi e un segnale di insegnamento sull'oliva " +
-    'inferiore. Il test presenta trial uditivi, visivi e audiovisivi a plasticità spenta e confronta le risposte del DCN.',
+    "Rete cerebellare di Cavadini et al. (2025), il modello del gruppo di controllo. Addestra le vie A e B con stimoli " +
+    "uditivi o visivi e un segnale di insegnamento sull'oliva inferiore; il test presenta trial uditivi, visivi e " +
+    'audiovisivi a plasticità spenta e confronta la risposta audiovisiva con il modello a gara.',
   decision_making:
-    'Due popolazioni eccitatorie in competizione, con inibizione comune, ricevono lo stimolo su un lato per trial ' +
-    '(rete attrattore di Wang). Il tempo di reazione è il primo superamento della soglia da parte della frequenza ' +
-    'della popolazione stimolata.',
+    'Rete corticale di Cavadini et al. (2025), il modello del paziente senza cervelletto. Due popolazioni eccitatorie ' +
+    'in competizione, con inibizione comune, ricevono lo stimolo su un lato per trial (rete attrattore di Wang). ' +
+    'La risposta è il primo superamento della soglia da parte della frequenza di una delle due popolazioni; ' +
+    'è corretta se a superarla è la popolazione stimolata.',
 };
-
-const seconds = (ms: number) => (ms / 1000).toLocaleString('it-IT', { maximumFractionDigits: 1 });
 
 @Component({
   selector: 'app-simulation-runner',
@@ -67,7 +69,7 @@ const seconds = (ms: number) => (ms / 1000).toLocaleString('it-IT', { maximumFra
           <div class="panel-header">
             <div>
               <h2 class="section-title">{{ net.name }}</h2>
-              <p class="help">Rete con {{ populations().length }} popolazioni e {{ neurons() }} neuroni.</p>
+              <p class="help">Rete con {{ summary() }}.</p>
             </div>
             <a class="btn btn-sm" [routerLink]="['/networks', net.id]">Apri nell'editor</a>
           </div>
@@ -83,14 +85,13 @@ const seconds = (ms: number) => (ms / 1000).toLocaleString('it-IT', { maximumFra
           </ul>
         </section>
 
-        <div class="tabs mb-5" role="tablist" aria-label="Tipo di simulazione">
+        <div class="tabs mb-5" role="group" aria-label="Tipo di simulazione">
           @for (tab of tabs; track tab.mode) {
             <button
               type="button"
-              role="tab"
               class="tab"
               [class.tab-active]="state.mode === tab.mode"
-              [attr.aria-selected]="state.mode === tab.mode"
+              [attr.aria-pressed]="state.mode === tab.mode"
               (click)="state.mode = tab.mode"
             >
               {{ tab.label }}
@@ -130,6 +131,11 @@ const seconds = (ms: number) => (ms / 1000).toLocaleString('it-IT', { maximumFra
                   @case ('decision_making') {
                     <app-decision-making-form [draft]="state.builtinDrafts.decision_making" />
                   }
+                }
+                @if (inherited(); as extra) {
+                  <p class="help mt-4">
+                    Altri parametri ereditati dalla simulazione di partenza: <span class="num">{{ extra }}</span>
+                  </p>
                 }
               </div>
             </section>
@@ -228,14 +234,17 @@ export class SimulationRunnerComponent {
   protected readonly builtinKinds = BUILTIN_KINDS;
   protected readonly labels = EXPERIMENT_LABELS;
   protected readonly descriptions = DESCRIPTIONS;
-  protected readonly maxSeconds = MAX_SIMULATION_MS / 1000;
+  protected readonly maxSeconds = formatNumber(MAX_SIMULATION_MS / 1000);
 
   protected network = signal<Network | null>(null);
   protected loadError = signal<string | null>(null);
   protected launching = signal(false);
   protected launchError = signal<string | null>(null);
   protected populations = computed(() => this.network()?.definition?.topology?.populations ?? []);
-  protected neurons = computed(() => countNeurons(this.populations()).toLocaleString('it-IT'));
+  protected summary = computed(() => {
+    const neurons = countNeurons(this.populations());
+    return `${plural(this.populations().length, 'popolazione', 'popolazioni')} e ${plural(neurons, 'neurone', 'neuroni')}`;
+  });
 
   // undefined durante il caricamento, null se il caricamento è fallito.
   protected catalogue = toSignal(this.networks.getModels().pipe(catchError(() => of(null))));
@@ -249,10 +258,8 @@ export class SimulationRunnerComponent {
   protected name = '';
 
   constructor() {
-    const params = inject(ActivatedRoute).snapshot.paramMap;
-    const networkId = params.get('networkId') ?? params.get('id') ?? '';
     this.networks
-      .getNetwork(networkId)
+      .getNetwork(inject(ActivatedRoute).snapshot.paramMap.get('id') ?? '')
       .pipe(takeUntilDestroyed())
       .subscribe({
         next: (network) => {
@@ -267,13 +274,18 @@ export class SimulationRunnerComponent {
       });
   }
 
+  /** Parametri ripresi da una simulazione precedente per i quali l'esperimento scelto non ha un campo. */
+  protected inherited(): string {
+    return inheritedParams(this.state.builtin, this.state.builtinDrafts[this.state.builtin]).join(', ');
+  }
+
   /** Durata e impedimenti al lancio per la modalità attiva. */
   protected review(): { duration: string | null; upperBound: boolean; blockers: string[] } {
     const params = buildParams(this.state);
     const kind = experimentKind(params);
     const ms = estimateDurationMs(params);
     return {
-      duration: Number.isFinite(ms) && ms > 0 ? `${seconds(ms)} s` : null,
+      duration: Number.isFinite(ms) && ms > 0 ? `${formatNumber(ms / 1000, 1, 0)} s` : null,
       upperBound: kind === 'cerebellum_msi_race' || (kind === 'trial_protocol' && this.state.trials.iti_random),
       blockers: validateState(this.state, { populations: this.populations(), stimuli: this.stimuli() ?? null }),
     };

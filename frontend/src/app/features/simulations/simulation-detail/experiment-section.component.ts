@@ -1,10 +1,11 @@
 import { Component, computed, input } from '@angular/core';
 
 import { LabelledGraph } from '../../../core/models';
+import { formatNumber } from '../../../core/utils/format';
 import { Fact, FactsComponent } from './facts.component';
 import { ItNumPipe } from './it-num.pipe';
 import { ResultFigureComponent } from './result-figure.component';
-import { conditionLabel, formatNumber } from './results-helpers';
+import { conditionLabel } from './results-helpers';
 
 type Metrics = Record<string, any>;
 
@@ -16,6 +17,12 @@ interface Outcome {
 }
 
 const CONDITION_ORDER = ['auditory', 'visual', 'audiovisual'];
+
+/** Reti della modalità "dual" dell'esperimento di decisione. */
+const NETWORK_LABELS: [key: string, label: string][] = [
+  ['auditory', 'rete uditiva'],
+  ['visual', 'rete visiva'],
+];
 
 function conditionRank(key: string): number {
   const index = CONDITION_ORDER.indexOf(key);
@@ -36,6 +43,13 @@ function percent(fraction: unknown): string {
   imports: [FactsComponent, ItNumPipe, ResultFigureComponent],
   host: { class: 'block space-y-4' },
   template: `
+    @if (metrics()?.['network_adapted'] === true) {
+      <p class="notice">
+        La rete usa modelli EGLIF: per questa simulazione sono stati sostituiti con
+        <span class="num">iaf_cond_exp</span>.
+      </p>
+    }
+
     @if (conditioning(); as view) {
       @if (view.rows.length) {
         <div class="panel overflow-x-auto">
@@ -79,7 +93,7 @@ function percent(fraction: unknown): string {
       }
       @if (view.weights; as weights) {
         <div class="panel panel-body space-y-3">
-          <h3 class="font-medium">Pesi sinaptici</h3>
+          <h3 class="subsection-title">Pesi sinaptici</h3>
           <app-facts [facts]="weights" />
           <p class="help">Pesi GR→PC al termine dell'addestramento. Depressa: sinapsi sotto l'80% del peso iniziale.</p>
         </div>
@@ -89,7 +103,7 @@ function percent(fraction: unknown): string {
     @if (facts(); as view) {
       <div class="panel panel-body space-y-3">
         @if (view.title) {
-          <h3 class="font-medium">{{ view.title }}</h3>
+          <h3 class="subsection-title">{{ view.title }}</h3>
         }
         <app-facts [facts]="view.facts" />
       </div>
@@ -97,7 +111,7 @@ function percent(fraction: unknown): string {
 
     @if (json(); as text) {
       <details class="panel">
-        <summary class="cursor-pointer px-4 py-3 text-sm font-medium">Metriche (JSON)</summary>
+        <summary>Metriche (JSON)</summary>
         <div class="border-t border-line p-4">
           <pre class="code-block">{{ text }}</pre>
         </div>
@@ -166,15 +180,21 @@ export class ExperimentSectionComponent {
     const metrics = this.metrics();
     if (!metrics) return null;
     if (this.kind() === 'decision') {
+      // Solo le risposte corrette hanno un tempo di risposta: quelle sul lato sbagliato non entrano nell'elenco.
       const responses = metrics['response_times_ms'];
+      const byNetwork: Record<string, number | null> | undefined = metrics['median_by_network_ms'];
       return {
         title: null,
         facts: [
           { label: 'Modalità', value: conditionLabel(String(metrics['modality'] ?? 'n.d.')), plain: true },
           { label: 'Trial', value: formatNumber(metrics['num_trials']) },
-          { label: 'Risposte', value: formatNumber(Array.isArray(responses) ? responses.length : null) },
+          { label: 'Risposte corrette', value: formatNumber(Array.isArray(responses) ? responses.length : null) },
           { label: 'Tempo di risposta mediano', ...responseTime(metrics['median_response_time_ms']) },
           { label: 'Tempo di risposta medio', ...responseTime(metrics['mean_response_time_ms']) },
+          ...NETWORK_LABELS.filter(([key]) => byNetwork && key in byNetwork).map(([key, label]) => ({
+            label: `Tempo di risposta mediano, ${label}`,
+            ...responseTime(byNetwork?.[key]),
+          })),
           { label: 'Frequenza media A', value: `${formatNumber(metrics['avg_rate_A_hz'], 2)} Hz` },
           { label: 'Frequenza media B', value: `${formatNumber(metrics['avg_rate_B_hz'], 2)} Hz` },
           { label: 'Frequenza media inibitoria', value: `${formatNumber(metrics['avg_rate_inh_hz'], 2)} Hz` },

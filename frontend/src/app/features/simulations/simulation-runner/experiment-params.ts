@@ -3,6 +3,7 @@
  * inversa per ripartire dai parametri di una simulazione già lanciata.
  */
 
+import { RULE_PARAMS } from '../../../core/data/connection-rules';
 import {
   CONDITIONING_DEFAULTS,
   DECISION_MAKING_DEFAULTS,
@@ -29,22 +30,15 @@ export const STATIC_SYNAPSE = 'static_synapse';
 export const SPIKE_TRAIN_STIMULUS = 'spike_train_stimulus';
 export const SENSORY_STIMULUS = 'legacy_sensory_stimulus';
 
-/** Parametro che ogni regola di connessione aggiunge a `params`, con il valore proposto. */
-export const RULE_PARAMS: Record<ConnectionRule, { key: string; initial: number } | null> = {
-  all_to_all: null,
-  one_to_one: null,
-  fixed_indegree: { key: 'indegree', initial: 1 },
-  fixed_outdegree: { key: 'outdegree', initial: 1 },
-  pairwise_bernoulli: { key: 'p', initial: 0.1 },
-};
-export const CONNECTION_RULES = Object.keys(RULE_PARAMS) as ConnectionRule[];
-
 // --- Bozze dei moduli generici ---
 
 export interface DeviceDraft {
   id: string;
   model: string;
   params: Record<string, unknown>;
+  size?: number;
+  /** Testo di "Altri parametri" quando non è un oggetto JSON: finché c'è, il lancio è bloccato. */
+  invalidExtra?: string;
 }
 
 /**
@@ -57,6 +51,8 @@ export interface ConnectionDraft {
   rule: ConnectionRule;
   synapse_model: string;
   params: Record<string, unknown>;
+  /** Come in `DeviceDraft`. */
+  invalidExtra?: string;
 }
 
 export interface InputsDraft {
@@ -158,35 +154,59 @@ export function setConnectionRule(connection: ConnectionDraft, rule: ConnectionR
 
 // --- Esperimenti predefiniti ---
 
+function isRecord(value: unknown): value is Record<string, any> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 /**
- * Copia di `values` con esattamente le chiavi di `defaults`: le chiavi estranee
- * non passano, quelle assenti prendono il valore di default.
+ * Copia di `values` con la forma di `defaults`: le chiavi assenti prendono il valore
+ * di default. Le chiavi che i default non hanno (parametri che il modulo non mostra,
+ * come `network_overrides`) restano come sono, a ogni livello: senza, rilanciare una
+ * simulazione le riporterebbe ai valori predefiniti del simulatore.
  */
 function shapeLike(defaults: any, values: any): any {
   if (Array.isArray(defaults)) {
     return defaults.map((item, index) => shapeLike(item, Array.isArray(values) ? values[index] : undefined));
   }
-  if (defaults !== null && typeof defaults === 'object') {
-    const source = values !== null && typeof values === 'object' ? values : {};
-    return Object.fromEntries(Object.keys(defaults).map((key) => [key, shapeLike(defaults[key], source[key])]));
+  if (isRecord(defaults)) {
+    const source = isRecord(values) ? values : {};
+    const shaped = Object.fromEntries(Object.keys(defaults).map((key) => [key, shapeLike(defaults[key], source[key])]));
+    for (const key of Object.keys(source)) {
+      if (!(key in defaults)) shaped[key] = structuredClone(source[key]);
+    }
+    return shaped;
   }
   return values === undefined ? defaults : values;
 }
 
-/** Bozza di un esperimento predefinito: i default, sovrascritti dai parametri di una simulazione precedente. */
+/**
+ * Bozza di un esperimento predefinito: i default, sovrascritti dai parametri di una
+ * simulazione precedente. Applicata a una bozza ne restituisce il payload di lancio.
+ */
 export function builtinDraft(kind: BuiltinKind, params?: ExperimentParams | null): ExperimentParams {
   return { ...shapeLike(BUILTIN_DEFAULTS[kind], params ?? {}), builtin: kind };
 }
 
-export function buildBuiltinParams(kind: BuiltinKind, draft: ExperimentParams): ExperimentParams {
-  return builtinDraft(kind, draft);
+/** Parametri della bozza che i default non hanno, come "percorso = JSON": vanno mostrati, perché il modulo non ha un campo per loro. */
+export function inheritedParams(kind: BuiltinKind, draft: ExperimentParams): string[] {
+  const walk = (defaults: Record<string, any>, values: Record<string, any>, prefix: string): string[] =>
+    Object.entries(values).flatMap(([key, value]) => {
+      if (!(key in defaults)) return [`${prefix}${key} = ${JSON.stringify(value)}`];
+      return isRecord(defaults[key]) && isRecord(value) ? walk(defaults[key], value, `${prefix}${key}.`) : [];
+    });
+  return walk(BUILTIN_DEFAULTS[kind], draft, '');
 }
 
 // --- Moduli generici ---
 
 function buildInputs(inputs: InputsDraft): ExperimentParams {
   return {
-    devices: inputs.devices.map((device) => ({ id: device.id, model: device.model, params: { ...device.params } })),
+    devices: inputs.devices.map((device) => ({
+      id: device.id,
+      model: device.model,
+      params: { ...device.params },
+      ...(device.size ? { size: device.size } : {}),
+    })),
     connections: inputs.connections.map((connection) => ({
       source: connection.device?.id ?? '',
       target: connection.target,
@@ -254,7 +274,7 @@ export function buildContinuousParams(draft: ContinuousDraft): ExperimentParams 
 export function buildParams(state: RunnerState): ExperimentParams {
   switch (state.mode) {
     case 'builtin':
-      return buildBuiltinParams(state.builtin, state.builtinDrafts[state.builtin]);
+      return builtinDraft(state.builtin, state.builtinDrafts[state.builtin]);
     case 'trials':
       return buildTrialProtocolParams(state.trials);
     case 'continuous':
@@ -269,7 +289,7 @@ function asArray(value: unknown): any[] {
 }
 
 function asRecord(value: unknown): Record<string, any> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : {};
+  return isRecord(value) ? value : {};
 }
 
 function inputsDraft(inputs: unknown): InputsDraft {
@@ -278,6 +298,8 @@ function inputsDraft(inputs: unknown): InputsDraft {
     id: String(device?.id ?? ''),
     model: String(device?.model ?? ''),
     params: { ...asRecord(device?.params) },
+    // Numero di generatori: si imposta solo dall'API, ma un rilancio non deve perderlo.
+    ...(Number(device?.size) > 1 ? { size: Number(device.size) } : {}),
   }));
   const byId = new Map(devices.map((device) => [device.id, device]));
   const connections: ConnectionDraft[] = asArray(source['connections']).map((connection) => ({
@@ -406,7 +428,9 @@ export function estimateDurationMs(params: ExperimentParams): number {
   switch (experimentKind(params)) {
     case 'decision_making': {
       const dm = asRecord(params['decision_making']);
-      return Number(dm['trial_slot_ms']) * Number(dm['num_trials']);
+      // Con "dual" si simulano due reti, una dopo l'altra, sugli stessi trial.
+      const networks = dm['modality'] === 'dual' ? 2 : 1;
+      return networks * Number(dm['trial_slot_ms']) * Number(dm['num_trials']);
     }
     case 'cerebellum_conditioning':
       return (Number(params['n_train']) + 3 * Number(params['n_test'])) * CONDITIONING_TRIAL_MS;

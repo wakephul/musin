@@ -178,7 +178,7 @@ export interface TrialDetail {
   actual_winner: string;
   /** null quando il trial non ha una risposta attesa e non entra nel conteggio. */
   is_correct: boolean | null;
-  net_evidence: number;
+  net_evidence: number | null;
 }
 
 export interface AccuracyMetric {
@@ -191,6 +191,7 @@ export interface AccuracyMetric {
   detection?: {
     hits: number;
     misses: number;
+    /** Risposte sulla via non addestrata. */
     wrong_pathway?: number;
     false_alarms: number;
     correct_rejections: number;
@@ -204,12 +205,22 @@ export interface RaceModelResult {
   n_A: number;
   n_AV: number;
   max_rmi_violation: number;
+  /** Con `p_value` presente: violazione significativa (p < 0,05). Nei risultati più vecchi: massimo oltre 0,05. */
   has_facilitation: boolean;
+  /** Avvertenza dell'esperimento su come leggere il risultato. */
+  note?: string;
+  /** Probabilità di una violazione così grande se il modello a gara vale; null se i trial sono troppo pochi. */
+  p_value?: number | null;
   /** rate_threshold_crossing: superamento di soglia della frequenza; first_spike_latency: primo spike. */
   method?: 'rate_threshold_crossing' | 'first_spike_latency';
   /** Trial presentati per condizione (n_* conta solo quelli con risposta). */
   trials?: Record<string, number>;
   median_rt_ms?: Record<string, number | null>;
+  /** Percentili (5, 15, …, 95) e relativi tempi per condizione; `race` è il modello a gara a coppie. */
+  percentile_levels?: number[];
+  percentiles_ms?: Record<string, number[]>;
+  /** A quanti di quei percentili la risposta AV è più veloce del modello a gara. */
+  percentiles_av_faster_than_race?: number;
 }
 
 export interface ResponseAnalysisEntry {
@@ -255,6 +266,15 @@ export const STATUS_CLASSES: Record<SimulationStatus, string> = {
   FAILED: 'status status-failed',
   ABORTED: 'status',
 };
+
+/** Esperimenti che costruiscono una rete propria: quella selezionata al lancio non viene simulata. */
+const OWN_NETWORK_EXPERIMENTS: ExperimentKind[] = ['cerebellum_conditioning', 'decision_making'];
+
+export function simulatesSelectedNetwork(experiment: ExperimentKind): boolean {
+  return !OWN_NETWORK_EXPERIMENTS.includes(experiment);
+}
+
+export const OWN_NETWORK_LABEL = "rete interna dell'esperimento";
 
 export const EXPERIMENT_LABELS: Record<ExperimentKind, string> = {
   cerebellum_msi_race: 'Integrazione multisensoriale AV',

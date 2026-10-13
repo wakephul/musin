@@ -25,13 +25,20 @@ import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../auth/register/regis
           <input id="next" type="password" class="input" formControlName="next" autocomplete="new-password" />
           <p class="help">Almeno {{ minLength }} caratteri.</p>
         </div>
+        <div>
+          <label class="label" for="confirm">Ripeti la nuova password</label>
+          <input id="confirm" type="password" class="input" formControlName="confirm" autocomplete="new-password" />
+          @if (form.controls.confirm.touched && mismatch()) {
+            <p class="field-error">Le due password non coincidono.</p>
+          }
+        </div>
         @if (error()) {
           <p class="notice notice-error" role="alert">{{ error() }}</p>
         }
         @if (saved()) {
           <p class="notice notice-ok" role="status">Password aggiornata.</p>
         }
-        <button type="submit" class="btn btn-primary" [disabled]="form.invalid || loading()">Salva</button>
+        <button type="submit" class="btn btn-primary" [disabled]="form.invalid || mismatch() || loading()">Salva</button>
       </form>
     </div>
   `,
@@ -43,13 +50,19 @@ export class AccountComponent {
   protected form = inject(FormBuilder).nonNullable.group({
     current: ['', Validators.required],
     next: ['', [Validators.required, Validators.minLength(PASSWORD_MIN_LENGTH), Validators.maxLength(PASSWORD_MAX_LENGTH)]],
+    confirm: ['', Validators.required],
   });
   protected loading = signal(false);
   protected error = signal<string | null>(null);
   protected saved = signal(false);
 
+  protected mismatch(): boolean {
+    const { next, confirm } = this.form.getRawValue();
+    return next !== confirm;
+  }
+
   submit(): void {
-    if (this.form.invalid) return;
+    if (this.form.invalid || this.mismatch()) return;
     const { current, next } = this.form.getRawValue();
     this.loading.set(true);
     this.error.set(null);

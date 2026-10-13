@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { CONDITIONING_DEFAULTS, DECISION_MAKING_DEFAULTS, MSI_RACE_DEFAULTS } from '../../../core/data/protocol-presets';
-import { buildParams, estimateDurationMs, experimentKind, stateFromParams } from './experiment-params';
+import {
+  BUILTIN_KINDS,
+  buildParams,
+  estimateDurationMs,
+  experimentKind,
+  inheritedParams,
+  stateFromParams,
+} from './experiment-params';
 
 const TRIALS = {
   resolution: 0.1,
@@ -41,6 +48,47 @@ describe('experiment params', () => {
     }
   });
 
+  it('keeps the parameters that the forms do not show when relaunching a simulation', () => {
+    // Regressione: le chiavi estranee ai default sparivano e la nuova simulazione tornava ai valori predefiniti.
+    const msi = { ...MSI_RACE_DEFAULTS, train: { ...MSI_RACE_DEFAULTS.train, us_window_ms: [250, 500] } };
+    const conditioning = { ...CONDITIONING_DEFAULTS, GR_num: 1000, PC_num: 50 };
+    const decision = {
+      ...DECISION_MAKING_DEFAULTS,
+      decision_making: { ...DECISION_MAKING_DEFAULTS.decision_making, bin_size_ms: 2 },
+      network_overrides: { w_plus: 1.7 },
+    };
+    for (const params of [msi, conditioning, decision]) expect(buildParams(stateFromParams(params))).toEqual(params);
+
+    const draft = stateFromParams(decision).builtinDrafts.decision_making;
+    // La bozza non condivide oggetti con i parametri di partenza.
+    expect(draft['network_overrides']).not.toBe(decision.network_overrides);
+    expect(inheritedParams('decision_making', draft)).toEqual([
+      'decision_making.bin_size_ms = 2',
+      'network_overrides = {"w_plus":1.7}',
+    ]);
+    expect(inheritedParams('cerebellum_msi_race', stateFromParams(msi).builtinDrafts.cerebellum_msi_race)).toEqual([
+      'train.us_window_ms = [250,500]',
+    ]);
+    expect(inheritedParams('cerebellum_conditioning', stateFromParams(conditioning).builtinDrafts.cerebellum_conditioning)).toEqual([
+      'GR_num = 1000',
+      'PC_num = 50',
+    ]);
+  });
+
+  it('adds nothing to a form that does not start from a previous simulation', () => {
+    const defaults = {
+      cerebellum_msi_race: MSI_RACE_DEFAULTS,
+      cerebellum_conditioning: CONDITIONING_DEFAULTS,
+      decision_making: DECISION_MAKING_DEFAULTS,
+    };
+    const state = stateFromParams();
+    for (const kind of BUILTIN_KINDS) {
+      state.builtin = kind;
+      expect(buildParams(state)).toEqual(defaults[kind]);
+      expect(inheritedParams(kind, state.builtinDrafts[kind])).toEqual([]);
+    }
+  });
+
   it('builds the payload from the active mode only', () => {
     // Regressione: una chiave `builtin` rimasta da un preset faceva partire l'esperimento sbagliato.
     const state = stateFromParams(MSI_RACE_DEFAULTS);
@@ -58,8 +106,9 @@ describe('experiment params', () => {
   });
 
   it('estimates duration like the backend', () => {
-    expect(estimateDurationMs(CONDITIONING_DEFAULTS)).toBe((20 + 3 * 20) * 3000);
-    expect(estimateDurationMs(DECISION_MAKING_DEFAULTS)).toBe(12 * 3000);
+    expect(estimateDurationMs(CONDITIONING_DEFAULTS)).toBe((15 + 3 * 30) * 3000);
+    expect(estimateDurationMs(DECISION_MAKING_DEFAULTS)).toBe(2 * 12 * 3000);   // due reti
+    expect(estimateDurationMs({ builtin: 'decision_making', decision_making: { modality: 'visual', trial_slot_ms: 3000, num_trials: 12 } })).toBe(12 * 3000);
     expect(estimateDurationMs(MSI_RACE_DEFAULTS)).toBe(45 * (1000 + 1000) + 100 * (1000 + 400));
     expect(estimateDurationMs(TRIALS)).toBe(16 * (600 + 400));
     expect(estimateDurationMs({ phases: { train_duration_ms: 0, test_duration_ms: 500 } })).toBe(500);

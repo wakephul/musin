@@ -1,6 +1,7 @@
 /** Parametri di partenza degli esperimenti predefiniti (stessa forma di `experiment_params`). */
 
-export const MSI_REQUIRED_POPULATIONS = ['GR', 'PC_A', 'PC_B', 'IO_A', 'DCN_A', 'DCN_B'];
+/** Le stesse che il simulatore pretende (worker/networks/cerebellum_msi_race.py). */
+export const MSI_REQUIRED_POPULATIONS = ['GR', 'PC_A', 'IO_A', 'DCN_A', 'DCN_B'];
 
 export const MSI_RACE_DEFAULTS = {
   builtin: 'cerebellum_msi_race',
@@ -33,20 +34,26 @@ export const MSI_RACE_DEFAULTS = {
 export const CONDITIONING_DEFAULTS = {
   builtin: 'cerebellum_conditioning',
   seed: 1234,
-  n_train: 20,
-  n_test: 20,
+  n_train: 15,
+  n_test: 30,
+  aud_latency_ms: 150,
+  vis_latency_ms: 220,
+  rt_smooth_bins: 5,
 };
 
 export const DECISION_MAKING_DEFAULTS = {
   builtin: 'decision_making',
   decision_making: {
-    modality: 'audiovisual',
+    modality: 'dual',
     num_trials: 12,
     rate: 30.0,
     number_of_neurons: 80,
     stimulus_window_ms: 600.0,
     trial_slot_ms: 3000.0,
     threshold: 15.0,
+    rt_smooth_bins: 5,
+    auditory_latency_ms: 150,
+    visual_latency_ms: 220,
     seed: 1234,
     order: 400,
   },

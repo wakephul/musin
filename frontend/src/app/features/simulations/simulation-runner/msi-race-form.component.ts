@@ -21,8 +21,8 @@ import { ParamGroupComponent } from './param-group.component';
         </p>
         @if (missing().length) {
           <p class="field-error" role="alert">
-            Mancano nella rete: <span class="num">{{ missing().join(', ') }}</span
-            >. Aggiungile nell'editor della rete prima di avviare.
+            {{ missing().length === 1 ? 'Manca' : 'Mancano' }} nella rete: <span class="num">{{ missing().join(', ') }}</span
+            >. {{ missing().length === 1 ? 'Aggiungila' : 'Aggiungile' }} nell'editor della rete prima di avviare.
           </p>
         }
       </div>
@@ -47,7 +47,7 @@ import { ParamGroupComponent } from './param-group.component';
       <fieldset>
         <legend class="section-title">{{ sections['response'] }}</legend>
         <p class="help mb-3">
-          Il tempo di reazione di un trial è il primo istante in cui la frequenza di una popolazione DCN supera la baseline
+          Il tempo di risposta di un trial è il primo istante in cui la frequenza di una popolazione DCN supera la baseline
           di almeno la soglia.
         </p>
         <app-param-group

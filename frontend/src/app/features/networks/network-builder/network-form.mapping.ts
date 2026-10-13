@@ -1,8 +1,7 @@
+import { RULE_PARAMS } from '../../../core/data/connection-rules';
 import { ConnectionRule, Network, NetworkPayload, Population, Projection, Topology } from '../../../core/models';
+import { JsonObject, parseJsonObject } from '../../../core/utils/json';
 import { countNeurons, countSynapses } from '../../../core/utils/topology';
-
-export type JsonObject = Record<string, unknown>;
-export type DegreeKey = 'indegree' | 'outdegree' | 'p';
 
 export interface PopulationForm {
   /** Chiave interna, non salvata: le proiezioni puntano a questa, così cambiare l'ID non le scollega. */
@@ -53,20 +52,6 @@ export interface DraftTopology {
   projections: Projection[];
 }
 
-export const CONNECTION_RULES: ConnectionRule[] = [
-  'all_to_all',
-  'one_to_one',
-  'fixed_indegree',
-  'fixed_outdegree',
-  'pairwise_bernoulli',
-];
-
-export const DEGREE_KEY: Partial<Record<ConnectionRule, DegreeKey>> = {
-  fixed_indegree: 'indegree',
-  fixed_outdegree: 'outdegree',
-  pairwise_bernoulli: 'p',
-};
-
 /** Stesso limite di `MAX_POPULATION_SIZE` nel backend. */
 const MAX_POPULATION_SIZE = 1_000_000;
 
@@ -74,16 +59,6 @@ const MAX_POPULATION_SIZE = 1_000_000;
 
 export function formatJson(value: JsonObject): string {
   return JSON.stringify(value, null, 2);
-}
-
-/** Un campo vuoto vale `{}`. Lancia un errore se il testo non è un oggetto JSON. */
-export function parseJsonObject(text: string): JsonObject {
-  if (!text.trim()) return {};
-  const parsed: unknown = JSON.parse(text);
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new TypeError('serve un oggetto, per esempio {"V_th": -55}');
-  }
-  return parsed as JsonObject;
 }
 
 function tryParse(text: string): JsonObject | null {
@@ -141,7 +116,7 @@ export function splitParams(rule: ConnectionRule, params: JsonObject): Pick<Proj
     delete rest[key];
     return value;
   };
-  const degreeKey = DEGREE_KEY[rule];
+  const degreeKey = RULE_PARAMS[rule]?.key;
   return {
     degree: degreeKey ? take(degreeKey) : null,
     weight: take('weight'),
@@ -181,7 +156,7 @@ export function toFormValue(source: Network | NetworkPayload): NetworkFormValue 
 
 /** I campi dedicati tornano dentro `params`, dove li leggono backend e worker. */
 function projectionParams(proj: ProjectionForm, extra: JsonObject): JsonObject {
-  const degreeKey = DEGREE_KEY[proj.rule];
+  const degreeKey = RULE_PARAMS[proj.rule]?.key;
   return {
     ...(degreeKey && proj.degree !== null ? { [degreeKey]: proj.degree } : {}),
     ...(proj.weight !== null ? { weight: proj.weight } : {}),
@@ -266,7 +241,7 @@ function validateProjection(proj: ProjectionForm, keys: Set<number>): Projection
   if (proj.source === null || !keys.has(proj.source)) problems.source = 'Scegli la sorgente.';
   if (proj.target === null || !keys.has(proj.target)) problems.target = 'Scegli la destinazione.';
 
-  const degreeKey = DEGREE_KEY[proj.rule];
+  const degreeKey = RULE_PARAMS[proj.rule]?.key;
   if (degreeKey && degreeKey in extra) {
     if (proj.degree !== null) problems.degree = duplicated(degreeKey, degreeKey);
   } else if (degreeKey === 'p') {

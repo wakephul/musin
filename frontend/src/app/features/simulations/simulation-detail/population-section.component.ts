@@ -13,14 +13,14 @@ const COLLAPSE_ABOVE = 4;
   host: { class: 'block' },
   template: `
     <details class="panel" [open]="!long()">
-      <summary class="cursor-pointer px-4 py-3">
+      <summary>
         <h2 class="section-title inline">Popolazioni</h2>
         <span class="num ml-1 text-sm text-muted">({{ graphs().length }})</span>
       </summary>
       <div class="space-y-5 border-t border-line p-4">
         @if (long()) {
           <div class="max-w-xs">
-            <label class="label" for="population-filter">Filtra per id della popolazione</label>
+            <label class="label" for="population-filter">Filtra per ID della popolazione</label>
             <input
               #filter
               id="population-filter"
@@ -34,7 +34,7 @@ const COLLAPSE_ABOVE = 4;
         }
         @for (graph of filtered(); track graph.population_id) {
           <article class="space-y-2">
-            <h3 class="num text-sm font-medium">{{ graph.population_id }}</h3>
+            <h3 class="subsection-title num">{{ graph.population_id }}</h3>
             <div class="grid gap-4 lg:grid-cols-2">
               @if (graph.raster_url) {
                 <app-result-figure

@@ -3,8 +3,9 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ReactiveFormsModule } from '@angular/forms';
 
 import { ModelModule } from '../../../core/models';
+import { JsonObject } from '../../../core/utils/json';
 import { PopulationGroup } from './network-form.controls';
-import { JsonObject, PopulationProblems, paramsAfterModelChange } from './network-form.mapping';
+import { PopulationProblems, paramsAfterModelChange } from './network-form.mapping';
 
 @Component({
   selector: 'app-population-row',
@@ -14,7 +15,7 @@ import { JsonObject, PopulationProblems, paramsAfterModelChange } from './networ
   template: `
     <div class="space-y-3 px-4 py-3" [formGroup]="group()">
       <div class="flex items-center justify-between gap-2">
-        <h3 class="text-sm font-medium">Popolazione {{ index() + 1 }}</h3>
+        <h3 class="subsection-title">Popolazione {{ index() + 1 }}</h3>
         <button type="button" class="btn btn-quiet btn-sm" (click)="remove.emit()">Rimuovi</button>
       </div>
 

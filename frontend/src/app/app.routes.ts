@@ -1,13 +1,22 @@
 import { inject } from '@angular/core';
-import { Router, Routes } from '@angular/router';
+import { CanDeactivateFn, Router, Routes } from '@angular/router';
 
 import { AuthService } from './core/services/auth.service';
 
 const authGuard = () => (inject(AuthService).isAuthenticated() ? true : inject(Router).parseUrl('/login'));
 const publicGuard = () => (inject(AuthService).isAuthenticated() ? inject(Router).parseUrl('/dashboard') : true);
+// L'uscita è una rotta: così passa dalle guardie della pagina corrente e, se l'utente annulla, la sessione resta aperta.
+const logoutGuard = () => {
+  inject(AuthService).logout();
+  return inject(Router).parseUrl('/login');
+};
 
 const networkBuilder = () =>
   import('./features/networks/network-builder/network-builder.component').then((m) => m.NetworkBuilderComponent);
+
+// Unico punto in cui si usa confirm(): l'uscita va fermata prima che il router distrugga la pagina.
+const confirmUnsavedChanges: CanDeactivateFn<{ hasUnsavedChanges(): boolean }> = (component) =>
+  !component.hasUnsavedChanges() || confirm('Ci sono modifiche non salvate alla rete. Uscire senza salvare?');
 
 export const routes: Routes = [
   { path: '', redirectTo: 'dashboard', pathMatch: 'full' },
@@ -21,6 +30,7 @@ export const routes: Routes = [
     canActivate: [publicGuard],
     loadComponent: () => import('./features/auth/register/register.component').then((m) => m.RegisterComponent),
   },
+  { path: 'logout', canActivate: [logoutGuard], children: [] },
   {
     path: '',
     canActivate: [authGuard],
@@ -30,8 +40,8 @@ export const routes: Routes = [
         path: 'dashboard',
         loadComponent: () => import('./features/dashboard/dashboard/dashboard.component').then((m) => m.DashboardComponent),
       },
-      { path: 'networks/new', loadComponent: networkBuilder },
-      { path: 'networks/:id', loadComponent: networkBuilder },
+      { path: 'networks/new', loadComponent: networkBuilder, canDeactivate: [confirmUnsavedChanges] },
+      { path: 'networks/:id', loadComponent: networkBuilder, canDeactivate: [confirmUnsavedChanges] },
       {
         path: 'simulations/run/:id',
         loadComponent: () =>

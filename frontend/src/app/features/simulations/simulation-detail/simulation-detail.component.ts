@@ -3,16 +3,19 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { Subscription } from 'rxjs';
+import { Subscription, interval } from 'rxjs';
 
 import {
   EXPERIMENT_LABELS,
   FINAL_STATUSES,
+  OWN_NETWORK_LABEL,
+  STATUS_CLASSES,
   STATUS_LABELS,
   Simulation,
   SimulationProgress,
   SimulationResults,
   SimulationStatus,
+  simulatesSelectedNetwork,
 } from '../../../core/models';
 import { SimulationService } from '../../../core/services/simulation.service';
 import { apiErrorMessage } from '../../../core/utils/errors';
@@ -20,14 +23,8 @@ import { ConfirmButtonComponent } from '../../../shared/components/confirm-butto
 import { ItNumPipe } from './it-num.pipe';
 import { SimulationResultsComponent } from './simulation-results.component';
 
-// Classi scritte per esteso: Tailwind tiene solo quelle che trova nei sorgenti.
-const STATUS_CLASS: Record<SimulationStatus, string> = {
-  PENDING: 'status status-pending',
-  RUNNING: 'status status-running',
-  COMPLETED: 'status status-completed',
-  FAILED: 'status status-failed',
-  ABORTED: 'status',
-};
+/** Senza uno stato per più di questo tempo, a simulazione attiva, si avvisa che il server non risponde. */
+const SILENCE_MS = 10_000;
 
 @Component({
   selector: 'app-simulation-detail',
@@ -96,7 +93,11 @@ const STATUS_CLASS: Record<SimulationStatus, string> = {
               <div>
                 <dt class="label">Rete</dt>
                 <dd>
-                  <a [routerLink]="['/networks', sim.network_id]">{{ sim.network_name || 'Rete #' + sim.network_id }}</a>
+                  @if (simulatesNetwork(sim)) {
+                    <a [routerLink]="['/networks', sim.network_id]">{{ sim.network_name || 'Rete #' + sim.network_id }}</a>
+                  } @else {
+                    {{ ownNetworkLabel }}
+                  }
                 </dd>
               </div>
               <div>
@@ -127,6 +128,9 @@ const STATUS_CLASS: Record<SimulationStatus, string> = {
                 >
                   <span [style.width.%]="percent()"></span>
                 </div>
+                @if (unreachable()) {
+                  <p class="notice" role="alert">Server non raggiungibile: nuovo tentativo in corso.</p>
+                }
               </div>
             }
 
@@ -146,10 +150,10 @@ const STATUS_CLASS: Record<SimulationStatus, string> = {
             }
 
             <details class="panel">
-              <summary class="cursor-pointer px-4 py-3 font-medium">Parametri</summary>
+              <summary>Parametri</summary>
               <div class="space-y-3 border-t border-line p-4">
                 <p class="text-sm">
-                  Durata simulata: <span class="num">{{ sim.duration_ms / 1000 | itNum: 3 : 0 }} s</span>
+                  Tempo biologico stimato: <span class="num">{{ sim.duration_ms / 1000 | itNum: 3 : 0 }} s</span>
                 </p>
                 <pre class="code-block">{{ paramsJson() }}</pre>
               </div>
@@ -157,7 +161,7 @@ const STATUS_CLASS: Record<SimulationStatus, string> = {
 
             @if (status() === 'COMPLETED') {
               @if (results(); as res) {
-                <app-simulation-results [results]="res" />
+                <app-simulation-results [results]="res" (linksExpiring)="loadResults()" />
               } @else if (resultsError()) {
                 <div class="notice notice-error flex flex-wrap items-center gap-3" role="alert">
                   <span>{{ resultsError() }}</span>
@@ -181,8 +185,9 @@ export class SimulationDetailComponent {
   private simulationService = inject(SimulationService);
   private destroyRef = inject(DestroyRef);
 
-  protected readonly id = this.route.snapshot.paramMap.get('simulationId') ?? this.route.snapshot.paramMap.get('id') ?? '';
-  protected readonly statusClass = STATUS_CLASS;
+  protected readonly id = this.route.snapshot.paramMap.get('id') ?? '';
+  protected readonly statusClass = STATUS_CLASSES;
+  protected readonly ownNetworkLabel = OWN_NETWORK_LABEL;
   protected readonly statusLabels = STATUS_LABELS;
   protected readonly experimentLabels: Record<string, string> = EXPERIMENT_LABELS;
 
@@ -195,6 +200,8 @@ export class SimulationDetailComponent {
   /** Messaggio quando la simulazione non esiste più (404). */
   protected gone = signal<string | null>(null);
   protected busy = signal(false);
+  /** Il polling non riceve uno stato da più di `SILENCE_MS`. */
+  protected unreachable = signal(false);
 
   /** Durante il polling lo stato più recente è quello dell'avanzamento. */
   protected readonly status = computed<SimulationStatus>(
@@ -203,7 +210,7 @@ export class SimulationDetailComponent {
   protected readonly active = computed(() => !FINAL_STATUSES.includes(this.status()));
   protected readonly percent = computed(() => Math.round(Math.min(100, Math.max(0, this.progress()?.progress ?? 0))));
   protected readonly phase = computed(
-    () => this.progress()?.phase || (this.status() === 'PENDING' ? 'In attesa del worker.' : 'Simulazione in corso.'),
+    () => this.progress()?.phase || (this.status() === 'PENDING' ? 'In attesa del simulatore.' : 'Simulazione in corso.'),
   );
   protected readonly deleteHint = computed(() => {
     if (this.active()) return 'La simulazione viene fermata.';
@@ -219,7 +226,7 @@ export class SimulationDetailComponent {
 
   /** Carica la simulazione e, secondo lo stato, avvia il polling o carica i risultati. */
   protected load(): void {
-    this.pollSubscription?.unsubscribe();
+    this.stopPolling();
     this.loadError.set(null);
     this.simulationService
       .getSimulation(this.id)
@@ -239,11 +246,14 @@ export class SimulationDetailComponent {
   }
 
   private poll(): void {
+    let lastStatusAt = Date.now();
     this.pollSubscription = this.simulationService
       .pollStatus(this.id)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: (progress) => {
+          lastStatusAt = Date.now();
+          this.unreachable.set(false);
           // L'ultimo valore dello stream è lo stato finale: si ricarica la simulazione per avere esito e risultati.
           if (FINAL_STATUSES.includes(progress.status)) this.load();
           else this.progress.set(progress);
@@ -251,6 +261,16 @@ export class SimulationDetailComponent {
         // pollStatus va in errore solo con un 404.
         error: () => this.gone.set('La simulazione è stata eliminata.'),
       });
+    // pollStatus tace sugli errori passeggeri e riprova: il silenzio prolungato è l'unico segnale che il server non risponde.
+    // Legato alla sottoscrizione del polling, si ferma con lei.
+    this.pollSubscription.add(
+      interval(1000).subscribe(() => this.unreachable.set(Date.now() - lastStatusAt > SILENCE_MS)),
+    );
+  }
+
+  private stopPolling(): void {
+    this.pollSubscription?.unsubscribe();
+    this.unreachable.set(false);
   }
 
   protected loadResults(): void {
@@ -286,7 +306,7 @@ export class SimulationDetailComponent {
     this.actionError.set(null);
     this.busy.set(true);
     // Il polling si ferma prima: altrimenti il suo 404 mostrerebbe "eliminata" un attimo prima del ritorno alla panoramica.
-    this.pollSubscription?.unsubscribe();
+    this.stopPolling();
     this.simulationService
       .deleteSimulation(this.id)
       .pipe(takeUntilDestroyed(this.destroyRef))
@@ -298,6 +318,10 @@ export class SimulationDetailComponent {
           this.load();
         },
       });
+  }
+
+  protected simulatesNetwork(simulation: Simulation): boolean {
+    return simulatesSelectedNetwork(simulation.experiment);
   }
 
   protected relaunch(simulation: Simulation): void {

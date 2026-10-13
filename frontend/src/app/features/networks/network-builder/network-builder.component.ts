@@ -8,7 +8,9 @@ import { NETWORK_PRESETS, NetworkPreset, presetToPayload } from '../../../core/d
 import { ModelInfo, Network, NetworkPayload } from '../../../core/models';
 import { NetworkService } from '../../../core/services/network.service';
 import { apiErrorMessage } from '../../../core/utils/errors';
+import { formatNumber, plural } from '../../../core/utils/format';
 import { countNeurons, countSynapses } from '../../../core/utils/topology';
+import { ConfirmButtonComponent } from '../../../shared/components/confirm-button/confirm-button.component';
 import { CytoscapeViewerComponent } from '../../../shared/components/cytoscape-viewer/cytoscape-viewer.component';
 import { fillForm, networkForm, populationGroup, projectionGroup } from './network-form.controls';
 import { NetworkFormValue, splitParams, toDraft, toFormValue, toPayload, validate } from './network-form.mapping';
@@ -16,12 +18,19 @@ import { PopulationRowComponent } from './population-row.component';
 import { ProjectionRowComponent } from './projection-row.component';
 
 const EMPTY_FORM: NetworkFormValue = { name: '', description: '', populations: [], projections: [] };
-const integer = new Intl.NumberFormat('it-IT');
 
 @Component({
   selector: 'app-network-builder',
   standalone: true,
-  imports: [ReactiveFormsModule, RouterLink, CytoscapeViewerComponent, PopulationRowComponent, ProjectionRowComponent],
+  imports: [
+    ReactiveFormsModule,
+    RouterLink,
+    ConfirmButtonComponent,
+    CytoscapeViewerComponent,
+    PopulationRowComponent,
+    ProjectionRowComponent,
+  ],
+  host: { '(window:beforeunload)': 'warnBeforeUnload($event)' },
   template: `
     <div class="page">
       <p class="breadcrumb"><a routerLink="/dashboard">Panoramica</a> / {{ network() ? 'Rete' : 'Nuova rete' }}</p>
@@ -85,19 +94,14 @@ const integer = new Intl.NumberFormat('it-IT');
                         <p class="font-medium">{{ preset.name }}</p>
                         <p class="help">{{ preset.description }}</p>
                       </div>
-                      @if (presetToConfirm() === preset.key) {
-                        <div class="flex flex-col items-end gap-1" role="alert">
-                          <p class="text-xs text-muted">Sostituisce le popolazioni e le proiezioni attuali.</p>
-                          <div class="flex gap-2">
-                            <button type="button" class="btn btn-danger btn-sm" (click)="usePreset(preset, true)">
-                              Conferma sostituzione
-                            </button>
-                            <button type="button" class="btn btn-quiet btn-sm" (click)="presetToConfirm.set(null)">Annulla</button>
-                          </div>
-                        </div>
-                      } @else {
-                        <button type="button" class="btn btn-sm" (click)="usePreset(preset)">Usa questo modello</button>
-                      }
+                      <app-confirm-button
+                        label="Usa questo modello"
+                        confirmLabel="Conferma sostituzione"
+                        hint="Sostituisce le popolazioni e le proiezioni attuali."
+                        triggerClass="btn btn-sm"
+                        [needsConfirm]="value().populations.length > 0"
+                        (confirmed)="usePreset(preset)"
+                      />
                     </li>
                   }
                 </ul>
@@ -204,7 +208,6 @@ export class NetworkBuilderComponent {
   protected error = signal<string | null>(null);
   protected notice = signal<string | null>(null);
   protected dirty = signal(false);
-  protected presetToConfirm = signal<string | null>(null);
 
   protected value = signal<NetworkFormValue>(EMPTY_FORM);
   protected problems = computed(() => validate(this.value()));
@@ -214,9 +217,9 @@ export class NetworkBuilderComponent {
     const { populations, projections } = this.draft();
     const neurons = countNeurons(populations);
     return [
-      `${populations.length} ${populations.length === 1 ? 'popolazione' : 'popolazioni'}`,
-      `${integer.format(neurons)} ${neurons === 1 ? 'neurone' : 'neuroni'}`,
-      `${integer.format(countSynapses(populations, projections))} sinapsi stimate`,
+      plural(populations.length, 'popolazione', 'popolazioni'),
+      plural(neurons, 'neurone', 'neuroni'),
+      `${formatNumber(countSynapses(populations, projections))} sinapsi stimate`,
     ].join(' · ');
   });
 
@@ -259,6 +262,19 @@ export class NetworkBuilderComponent {
       .subscribe(({ network, notice }) => this.show(network, notice));
   }
 
+  /** Letto dalla guardia di uscita in app.routes.ts. */
+  hasUnsavedChanges(): boolean {
+    return this.dirty();
+  }
+
+  /** Chiusura o ricaricamento della scheda: il browser chiede conferma con un testo suo. */
+  protected warnBeforeUnload(event: BeforeUnloadEvent): void {
+    if (!this.dirty()) return;
+    event.preventDefault();
+    // Richiesto dai browser che non considerano preventDefault.
+    event.returnValue = true;
+  }
+
   protected nameProblem(): boolean {
     return this.form.controls.name.touched && !!this.problems().name;
   }
@@ -292,12 +308,7 @@ export class NetworkBuilderComponent {
     );
   }
 
-  protected usePreset(preset: NetworkPreset, confirmed = false): void {
-    if (this.form.controls.populations.length && !confirmed) {
-      this.presetToConfirm.set(preset.key);
-      return;
-    }
-    this.presetToConfirm.set(null);
+  protected usePreset(preset: NetworkPreset): void {
     const fromPreset = toFormValue(presetToPayload(preset));
     const { name, description } = this.form.getRawValue();
     // Nome e descrizione già scritti restano: il modello riempie solo quelli vuoti.
@@ -324,9 +335,10 @@ export class NetworkBuilderComponent {
     request.subscribe({
       next: (saved) => {
         this.saving.set(false);
+        // Prima di navigare: la guardia di uscita non deve chiedere conferma per modifiche appena salvate.
+        this.dirty.set(false);
         if (saved.id === current?.id) {
           this.network.set(saved);
-          this.dirty.set(false);
           this.notice.set('Rete salvata.');
         } else if (!this.destroyed) {
           this.router.navigate(['/networks', saved.id], {
@@ -364,7 +376,6 @@ export class NetworkBuilderComponent {
     this.network.set(network);
     this.replaceForm(network ? toFormValue(network) : EMPTY_FORM);
     this.form.markAsUntouched();
-    this.presetToConfirm.set(null);
     this.dirty.set(false);
     this.notice.set(notice);
     this.loading.set(false);

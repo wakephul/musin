@@ -1,15 +1,10 @@
 import type { RaceModelGraph, RaceModelResult, ResponseGraph } from '../../../core/models';
 
-/** Numero in formato it-IT; `digits` decimali al massimo, `minDigits` al minimo. 'n.d.' se il valore manca. */
-export function formatNumber(value: unknown, digits = 0, minDigits = digits): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 'n.d.';
-  return value.toLocaleString('it-IT', { minimumFractionDigits: minDigits, maximumFractionDigits: digits });
-}
-
 const CONDITION_LABELS: Record<string, string> = {
   auditory: 'Uditivo',
   visual: 'Visivo',
   audiovisual: 'Audiovisivo',
+  dual: 'Due reti (uditiva e visiva)',
 };
 
 export function conditionLabel(key: string): string {

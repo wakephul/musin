@@ -10,6 +10,14 @@ interface ProjectionLike {
   params?: Record<string, unknown> | null;
 }
 
+/**
+ * Generatori e sorgenti di stimolo usati come popolazione: il simulatore non li registra
+ * (stessa regola di `is_stimulus_model` nel worker), quindi non hanno grafici né analisi.
+ */
+export function isStimulusModel(model: string | null | undefined): boolean {
+  return !!model && (model.includes('generator') || model.includes('stimulus'));
+}
+
 export function countNeurons(populations: PopulationLike[] | null | undefined): number {
   return (populations ?? []).reduce((total, pop) => total + (Number(pop.size) || 0), 0);
 }

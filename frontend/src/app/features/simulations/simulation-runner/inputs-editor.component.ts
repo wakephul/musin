@@ -1,17 +1,13 @@
-import { Component, computed, input, signal } from '@angular/core';
+import { Component, computed, input } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 
+import { CONNECTION_RULES, RULE_PARAMS } from '../../../core/data/connection-rules';
 import { ConnectionRule, ModelCatalogue, Population, Stimulus } from '../../../core/models';
-import {
-  CONNECTION_RULES,
-  ConnectionDraft,
-  DeviceDraft,
-  InputsDraft,
-  RULE_PARAMS,
-  STATIC_SYNAPSE,
-  setConnectionRule,
-} from './experiment-params';
+import { formatNumber, plural } from '../../../core/utils/format';
+import { parseJsonObject } from '../../../core/utils/json';
+import { isStimulusModel } from '../../../core/utils/topology';
+import { ConnectionDraft, DeviceDraft, InputsDraft, STATIC_SYNAPSE, setConnectionRule } from './experiment-params';
 import { CONNECTION_PARAM_META, DEVICE_PARAM_META, FieldMeta, metaFor } from './experiment-validation';
 import { ParamFieldComponent } from './param-field.component';
 
@@ -40,7 +36,7 @@ import { ParamFieldComponent } from './param-field.component';
       @for (device of inputs().devices; track device; let i = $index) {
         <div class="flex flex-wrap items-start gap-3 border-b border-line px-4 py-3 last:border-b-0">
           <div class="w-36">
-            <label class="label" [for]="'device-' + i + '-id'">Identificatore</label>
+            <label class="label" [for]="'device-' + i + '-id'">ID</label>
             <input
               type="text"
               class="input num"
@@ -104,13 +100,15 @@ import { ParamFieldComponent } from './param-field.component';
               type="text"
               class="input input-mono"
               [id]="'device-' + i + '-extra'"
-              [value]="extraText(device.params, knownDeviceKeys(device))"
-              (change)="setExtra(device, device.params, knownDeviceKeys(device), $event)"
+              [class.border-danger]="device.invalidExtra !== undefined"
+              [attr.aria-invalid]="device.invalidExtra !== undefined ? 'true' : null"
+              [value]="extraText(device, knownDeviceKeys(device))"
+              (change)="setExtra(device, knownDeviceKeys(device), $event)"
               placeholder='es. {"start": 100, "stop": 500}'
               spellcheck="false"
             />
-            @if (extraErrors().get(device); as message) {
-              <p class="field-error">{{ message }}</p>
+            @if (device.invalidExtra !== undefined) {
+              <p class="field-error" role="alert">{{ extraError }}</p>
             }
           </div>
           <button type="button" class="btn btn-quiet btn-sm ml-auto mt-5" (click)="removeDevice(device)">Rimuovi</button>
@@ -137,7 +135,7 @@ import { ParamFieldComponent } from './param-field.component';
             <select class="input num" [id]="'connection-' + i + '-source'" [(ngModel)]="connection.device">
               <option [ngValue]="null" disabled>Scegli</option>
               @for (device of inputs().devices; track device) {
-                <option [ngValue]="device">{{ device.id || 'senza identificatore' }}</option>
+                <option [ngValue]="device">{{ device.id || 'senza ID' }}</option>
               }
             </select>
           </div>
@@ -145,11 +143,11 @@ import { ParamFieldComponent } from './param-field.component';
             <label class="label" [for]="'connection-' + i + '-target'">Popolazione</label>
             <select class="input num" [id]="'connection-' + i + '-target'" [(ngModel)]="connection.target">
               <option value="" disabled>Scegli</option>
-              @for (population of populations(); track population.id) {
+              @for (population of targets(); track population.id) {
                 <option [value]="population.id">{{ population.id }}</option>
               }
-              @if (connection.target && !hasPopulation(connection.target)) {
-                <option [value]="connection.target">{{ connection.target }} (non nella rete)</option>
+              @if (unavailableTarget(connection.target); as reason) {
+                <option [value]="connection.target">{{ connection.target }} ({{ reason }})</option>
               }
             </select>
           </div>
@@ -191,13 +189,15 @@ import { ParamFieldComponent } from './param-field.component';
               type="text"
               class="input input-mono"
               [id]="'connection-' + i + '-extra'"
-              [value]="extraText(connection.params, connectionParamKeys)"
-              (change)="setExtra(connection, connection.params, connectionParamKeys, $event)"
+              [class.border-danger]="connection.invalidExtra !== undefined"
+              [attr.aria-invalid]="connection.invalidExtra !== undefined ? 'true' : null"
+              [value]="extraText(connection, connectionParamKeys)"
+              (change)="setExtra(connection, connectionParamKeys, $event)"
               placeholder='es. {"receptor_type": 1}'
               spellcheck="false"
             />
-            @if (extraErrors().get(connection); as message) {
-              <p class="field-error">{{ message }}</p>
+            @if (connection.invalidExtra !== undefined) {
+              <p class="field-error" role="alert">{{ extraError }}</p>
             }
           </div>
           <button type="button" class="btn btn-quiet btn-sm ml-auto mt-5" (click)="removeConnection(connection)">
@@ -228,10 +228,11 @@ export class InputsEditorComponent {
   protected readonly rules = CONNECTION_RULES;
   protected readonly connectionMeta = CONNECTION_PARAM_META;
   protected readonly connectionParamKeys = Object.keys(CONNECTION_PARAM_META);
-  /** Errore di sintassi nel JSON degli altri parametri, per dispositivo o connessione. */
-  protected extraErrors = signal(new Map<object, string>());
+  protected readonly extraError = 'Serve un oggetto JSON, ad esempio {"start": 100}. Finché non è corretto la simulazione non parte.';
 
   protected models = computed(() => this.catalogue()?.stimulus_devices ?? []);
+  /** Le popolazioni che possono ricevere uno stimolo: non quelle che sono a loro volta generatori. */
+  protected targets = computed(() => this.populations().filter((population) => !isStimulusModel(population.neuron_model)));
   /** Sinapsi del catalogo, senza i doppioni tra moduli. */
   protected synapses = computed(() => {
     const all = this.catalogue()?.modules.flatMap((module) => module.synapses) ?? [];
@@ -251,33 +252,33 @@ export class InputsEditorComponent {
     return this.synapses().some((synapse) => synapse.id === modelId);
   }
 
-  protected extraText(params: Record<string, unknown>, knownKeys: string[]): string {
-    const extra = Object.fromEntries(Object.entries(params).filter(([key]) => !knownKeys.includes(key)));
+  /** Il testo non valido resta com'è scritto, così si può correggere; altrimenti i parametri senza campo dedicato. */
+  protected extraText(owner: DeviceDraft | ConnectionDraft, knownKeys: string[]): string {
+    if (owner.invalidExtra !== undefined) return owner.invalidExtra;
+    const extra = Object.fromEntries(Object.entries(owner.params).filter(([key]) => !knownKeys.includes(key)));
     return Object.keys(extra).length ? JSON.stringify(extra) : '';
   }
 
-  /** Sostituisce i parametri senza campo dedicato con quelli scritti nel JSON. */
-  protected setExtra(owner: object, params: Record<string, unknown>, knownKeys: string[], event: Event): void {
-    const text = (event.target as HTMLInputElement).value.trim();
-    const errors = new Map(this.extraErrors());
-    let extra: unknown = {};
+  /**
+   * Sostituisce i parametri senza campo dedicato con quelli scritti nel JSON.
+   * Un testo non valido resta sulla bozza (`invalidExtra`) e blocca il lancio:
+   * altrimenti partirebbero i parametri di prima, diversi da quelli a schermo.
+   */
+  protected setExtra(owner: DeviceDraft | ConnectionDraft, knownKeys: string[], event: Event): void {
+    const text = (event.target as HTMLInputElement).value;
+    let extra: Record<string, unknown>;
     try {
-      if (text) extra = JSON.parse(text);
+      extra = parseJsonObject(text);
     } catch {
-      extra = null;
-    }
-    if (extra === null || typeof extra !== 'object' || Array.isArray(extra)) {
-      errors.set(owner, 'Serve un oggetto JSON, ad esempio {"start": 100}.');
-      this.extraErrors.set(errors);
+      owner.invalidExtra = text;
       return;
     }
-    errors.delete(owner);
-    this.extraErrors.set(errors);
-    for (const key of Object.keys(params)) {
-      if (!knownKeys.includes(key)) delete params[key];
+    delete owner.invalidExtra;
+    for (const key of Object.keys(owner.params)) {
+      if (!knownKeys.includes(key)) delete owner.params[key];
     }
     for (const [key, value] of Object.entries(extra)) {
-      if (!knownKeys.includes(key)) params[key] = value;
+      if (!knownKeys.includes(key)) owner.params[key] = value;
     }
   }
 
@@ -293,8 +294,10 @@ export class InputsEditorComponent {
     return this.models().some((model) => model.id === modelId);
   }
 
-  protected hasPopulation(id: string): boolean {
-    return this.populations().some((population) => population.id === id);
+  /** Perché la destinazione salvata non è tra le scelte, o `null` se lo è (o se manca). */
+  protected unavailableTarget(id: string): string | null {
+    if (!id || this.targets().some((population) => population.id === id)) return null;
+    return this.populations().some((population) => population.id === id) ? 'sorgente di stimolo' : 'non nella rete';
   }
 
   protected description(modelId: string): string | undefined {
@@ -303,7 +306,9 @@ export class InputsEditorComponent {
 
   protected stimulusLabel(stimulus: Stimulus): string {
     const definition = stimulus.definition;
-    return definition ? `${stimulus.name} · ${definition.n_trains} treni · ${definition.duration_ms} ms` : stimulus.name;
+    return definition
+      ? `${stimulus.name} · ${plural(definition.n_trains, 'treno', 'treni')} · ${formatNumber(definition.duration_ms, 1, 0)} ms`
+      : stimulus.name;
   }
 
   /** Parametro della regola, peso e ritardo: i campi modificabili di una connessione. */
@@ -320,6 +325,7 @@ export class InputsEditorComponent {
   protected setModel(device: DeviceDraft, modelId: string): void {
     device.model = modelId;
     device.params = { ...this.models().find((model) => model.id === modelId)?.default_params };
+    delete device.invalidExtra;
   }
 
   protected removeDevice(device: DeviceDraft): void {

@@ -5,6 +5,8 @@ import { Component, ElementRef, effect, input, output, signal, viewChild } from 
  * il secondo (su `confirmLabel`) emette `confirmed`.
  * `armed` è leggibile da fuori (`#ref` nel template) per nascondere le altre
  * azioni della riga mentre la conferma è aperta.
+ * Con `needsConfirm` falso il primo clic emette subito: serve quando la stessa
+ * azione è distruttiva solo in certi stati (non c'è niente da sostituire).
  */
 @Component({
   selector: 'app-confirm-button',
@@ -23,7 +25,7 @@ import { Component, ElementRef, effect, input, output, signal, viewChild } from 
         }
       </span>
     } @else {
-      <button #trigger type="button" class="btn btn-quiet btn-sm" [disabled]="disabled()" (click)="armed.set(true)">
+      <button #trigger type="button" [class]="triggerClass()" [disabled]="disabled()" (click)="start()">
         {{ label() }}
       </button>
     }
@@ -34,6 +36,8 @@ export class ConfirmButtonComponent {
   readonly confirmLabel = input('Conferma eliminazione');
   readonly hint = input<string>();
   readonly disabled = input(false);
+  readonly needsConfirm = input(true);
+  readonly triggerClass = input('btn btn-quiet btn-sm');
   readonly confirmed = output<void>();
 
   readonly armed = signal(false);
@@ -53,6 +57,11 @@ export class ConfirmButtonComponent {
         trigger.nativeElement.focus();
       }
     });
+  }
+
+  protected start(): void {
+    if (this.needsConfirm()) this.armed.set(true);
+    else this.confirmed.emit();
   }
 
   protected confirm(): void {

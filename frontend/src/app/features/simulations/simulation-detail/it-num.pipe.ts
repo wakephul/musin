@@ -1,6 +1,6 @@
 import { Pipe, PipeTransform } from '@angular/core';
 
-import { formatNumber } from './results-helpers';
+import { formatNumber } from '../../../core/utils/format';
 
 /** `{{ valore | itNum: 1 }}`: numero it-IT con un decimale (virgola). Senza argomenti, intero. */
 @Pipe({ name: 'itNum', standalone: true })

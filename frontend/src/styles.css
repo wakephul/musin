@@ -21,6 +21,9 @@
   code, pre, kbd {
     @apply font-mono;
   }
+  summary {
+    @apply cursor-pointer text-sm font-medium;
+  }
 }
 
 @layer components {
@@ -40,6 +43,10 @@
   .section-title {
     @apply text-base font-semibold;
   }
+  /* Titolo dentro una sezione o un pannello (h3): stessa misura del titolo di sezione, peso minore. */
+  .subsection-title {
+    @apply text-base font-medium;
+  }
   .breadcrumb {
     @apply mb-2 text-xs text-muted;
   }
@@ -53,6 +60,9 @@
   }
   .panel-body {
     @apply p-4;
+  }
+  .panel > summary {
+    @apply px-4 py-3;
   }
 
   /* Pulsanti */
@@ -100,7 +110,11 @@
     @apply w-full border-collapse text-sm;
   }
   .table-list th {
-    @apply border-b border-line px-4 py-2 text-left text-xs font-medium text-muted;
+    @apply border-b border-line px-4 py-2 text-xs font-medium text-muted;
+  }
+  /* Allineamento a specificità zero: text-right sulle colonne numeriche deve vincere. */
+  :where(.table-list) th {
+    @apply text-left;
   }
   .table-list td {
     @apply border-b border-line px-4 py-2.5 align-middle;

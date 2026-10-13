@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { EMPTY, Observable, throwError, timer } from 'rxjs';
-import { catchError, switchMap, takeWhile } from 'rxjs/operators';
+import { catchError, exhaustMap, takeWhile, timeout } from 'rxjs/operators';
 
 import {
   FINAL_STATUSES,
@@ -13,6 +13,7 @@ import {
 } from '../models';
 
 const POLL_INTERVAL_MS = 2000;
+const STATUS_TIMEOUT_MS = 10_000;
 
 @Injectable({ providedIn: 'root' })
 export class SimulationService {
@@ -43,14 +44,20 @@ export class SimulationService {
 
   /**
    * Stato ogni 2 s finché la simulazione non è in uno stato finale (incluso).
-   * Un errore passeggero salta un giro senza chiudere lo stream; un 404
-   * (simulazione eliminata) lo chiude con errore.
+   * Una richiesta lenta non viene scavalcata dalla successiva (exhaustMap); dopo
+   * 10 s senza risposta si abbandona. Un errore diverso dal 404 salta il giro
+   * senza chiudere lo stream, quindi chi ascolta lo vede come silenzio: tocca a
+   * lui dire all'utente che il server non risponde. Un 404 (simulazione
+   * eliminata) chiude lo stream con errore.
    */
   pollStatus(id: number | string): Observable<SimulationProgress> {
     return timer(0, POLL_INTERVAL_MS).pipe(
-      switchMap(() =>
+      exhaustMap(() =>
         this.getStatus(id).pipe(
-          catchError((error: HttpErrorResponse) => (error.status === 404 ? throwError(() => error) : EMPTY)),
+          timeout(STATUS_TIMEOUT_MS),
+          catchError((error: unknown) =>
+            error instanceof HttpErrorResponse && error.status === 404 ? throwError(() => error) : EMPTY,
+          ),
         ),
       ),
       takeWhile((progress) => !FINAL_STATUSES.includes(progress.status), true),

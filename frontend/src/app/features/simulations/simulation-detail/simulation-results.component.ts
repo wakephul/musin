@@ -1,5 +1,7 @@
-import { Component, computed, input } from '@angular/core';
+import { Component, computed, input, output } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RouterLink } from '@angular/router';
+import { interval } from 'rxjs';
 
 import { SimulationResults } from '../../../core/models';
 import { AccuracySectionComponent } from './accuracy-section.component';
@@ -9,6 +11,9 @@ import { RaceModelSectionComponent } from './race-model-section.component';
 import { ResponseSectionComponent } from './response-section.component';
 import { ResultFigureComponent } from './result-figure.component';
 import { buildResponseEntries } from './results-helpers';
+
+/** I link firmati di grafici e download scadono dopo un'ora. */
+const LINK_REFRESH_MS = 45 * 60 * 1000;
 
 /** Risultati di una simulazione completata: indice, download e una sezione per tipo di analisi. */
 @Component({
@@ -114,6 +119,8 @@ import { buildResponseEntries } from './results-helpers';
 })
 export class SimulationResultsComponent {
   readonly results = input.required<SimulationResults>();
+  /** Chiede a chi ha caricato i risultati di ricaricarli, prima che i link scadano con la pagina ancora aperta. */
+  readonly linksExpiring = output<void>();
 
   protected readonly responseEntries = computed(() => {
     const results = this.results();
@@ -134,6 +141,12 @@ export class SimulationResultsComponent {
     return candidates.filter(([, , present]) => !!present).map(([id, label]) => ({ id, label }));
   });
   protected readonly shown = computed(() => new Set(this.sections().map((section) => section.id)));
+
+  constructor() {
+    interval(LINK_REFRESH_MS)
+      .pipe(takeUntilDestroyed())
+      .subscribe(() => this.linksExpiring.emit());
+  }
 
   /** Il router aggiorna il frammento nell'URL ma non scorre la pagina: lo scorrimento è fatto qui. */
   protected scrollTo(id: string): void {

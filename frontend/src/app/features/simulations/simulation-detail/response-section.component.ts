@@ -19,7 +19,7 @@ const KIND_LABELS: Record<ResponseGraph['kind'], string> = {
     @for (entry of entries(); track $index) {
       <article class="panel">
         <header class="panel-header">
-          <h3 class="font-medium">{{ entry.label }}</h3>
+          <h3 class="subsection-title">{{ entry.label }}</h3>
         </header>
         <div class="panel-body space-y-4">
           @if (entry.rows.length) {
