@@ -140,13 +140,31 @@ def test_missed_trials_count_in_the_inequality_test():
 def test_median_confidence_intervals():
     rng = np.random.default_rng(3)
     samples = rng.normal(320, 60, 400)
-    low, high = median_ci(samples)
+    low, high = median_ci([samples])
     assert low < np.median(samples) < high and high - low < 25
-    assert median_ci(samples) == median_ci(samples)          # stesso seed, stesso intervallo
-    assert median_ci([300.0]) is None and median_ci([]) is None
+    assert median_ci([samples]) == median_ci([samples])          # stesso seed, stesso intervallo
+    assert median_ci([[300.0]]) is None and median_ci([]) is None and median_ci([[], []]) is None
 
-    same = median_difference_ci(samples, rng.normal(320, 60, 400))
+    same = median_difference_ci([samples], rng.normal(320, 60, 400))
     assert not same["differs"] and same["ci95_ms"][0] <= 0 <= same["ci95_ms"][1]
-    shifted = median_difference_ci(samples, rng.normal(260, 60, 400))
+    shifted = median_difference_ci([samples], rng.normal(260, 60, 400))
     assert shifted["differs"] and 40 < shifted["difference_ms"] < 80
-    assert median_difference_ci(samples, [300.0]) is None
+    assert median_difference_ci([samples], [300.0]) is None
+
+
+def test_simulations_that_differ_widen_the_interval():
+    """Tre simulazioni con mediane lontane tra loro: trattare i loro 120 trial come indipendenti
+    darebbe un intervallo stretto attorno alla mediana comune, che tre seed non giustificano."""
+    rng = np.random.default_rng(5)
+    simulations = [rng.normal(center, 20, 40) for center in (230, 265, 330)]
+    pooled = np.concatenate(simulations)
+    naive_low, naive_high = median_ci([pooled])
+    low, high = median_ci(simulations)
+    assert high - low > 2 * (naive_high - naive_low)
+    assert low < 240 and high > 300
+    # Simulazioni che si somigliano: i due intervalli quasi coincidono.
+    alike = [rng.normal(300, 20, 40) for _ in range(3)]
+    width = lambda interval: interval[1] - interval[0]
+    assert width(median_ci(alike)) < 1.6 * width(median_ci([np.concatenate(alike)]))
+    # Il confronto con un riferimento a 290 ms non può più dirsi diverso.
+    assert not median_difference_ci(simulations, rng.normal(290, 30, 40))["differs"]

@@ -76,6 +76,9 @@ def test_a_swept_parameter_multiplies_the_simulations(client, auth, network, que
     campaign = create(client, auth, network, seeds=[1, 2], sweep=sweep).json()
     assert [(m["value"], m["seed"]) for m in campaign["simulations"]] == [(150, 1), (150, 2), (180, 1), (180, 2)]
     assert len(queued_tasks) == 4
+    with SessionLocal() as db:
+        stored = db.get(Simulation, campaign["simulations"][0]["id"]).experiment_params["aud_latency_ms"]
+    assert stored == 150 and isinstance(stored, int)      # 150.0 farebbe fallire i parametri interi
     nested = {"path": "decision_making.auditory_latency_ms", "values": [150, 180, 210]}
     assert len(create(client, auth, network, params=DECISION, seeds=[1], sweep=nested).json()["simulations"]) == 3
 

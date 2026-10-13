@@ -64,7 +64,8 @@ def expand(params: dict, seeds: list, sweep: dict | None, save_spikes: bool = Fa
     if not seeds or len(set(seeds)) != len(seeds):
         raise CampaignError("I seed devono essere almeno uno e tutti diversi")
     check_sweep(params, sweep)
-    values = sweep["values"] if sweep else [None]
+    # 150.0 torna 150: i parametri interi (numero di trial, di neuroni) restano interi.
+    values = [int(v) if float(v).is_integer() else v for v in sweep["values"]] if sweep else [None]
     if len(seeds) * len(values) > MAX_CAMPAIGN_SIMULATIONS:
         raise CampaignError(f"Una campagna può avere al massimo {MAX_CAMPAIGN_SIMULATIONS} simulazioni")
     members = []
@@ -82,13 +83,15 @@ def expand(params: dict, seeds: list, sweep: dict | None, save_spikes: bool = Fa
 def summarise_group(entries: list, reference: dict | None = None) -> dict:
     """Mette insieme i tempi di risposta della stessa popolazione in più simulazioni.
     `entries` è una lista di (id simulazione, seed, voce di race_model.json)."""
-    pooled = {label: [] for label in CONDITIONS}
+    # Per condizione, i tempi di ogni simulazione: gli intervalli di confidenza ricampionano
+    # le simulazioni prima dei trial.
+    by_simulation = {label: [] for label in CONDITIONS}
     trials = {"V": 0, "A": 0, "AV": 0}
     per_simulation = []
     for simulation_id, seed, entry in entries:
         times = entry.get("reaction_times_ms") or {}
         for label in CONDITIONS:
-            pooled[label].extend(times.get(label) or [])
+            by_simulation[label].append(times.get(label) or [])
         for label in trials:
             trials[label] += int((entry.get("trials") or {}).get(label) or 0)
         per_simulation.append({
@@ -97,6 +100,7 @@ def summarise_group(entries: list, reference: dict | None = None) -> dict:
             "median_ms": {label: median_or_none(times[label]) for label in CONDITIONS if label in times},
         })
 
+    pooled = {label: [value for times in groups for value in times] for label, groups in by_simulation.items()}
     conditions = []
     for label in CONDITIONS:
         values = pooled[label]
@@ -107,7 +111,7 @@ def summarise_group(entries: list, reference: dict | None = None) -> dict:
             "trials": trials.get(label),
             "responses": len(values),
             "median_ms": median_or_none(values),
-            "ci95_ms": median_ci(values),
+            "ci95_ms": median_ci(by_simulation[label]),
             "percentiles_ms": percentiles(values),
         }
         reference_values = (reference or {}).get(label)
@@ -116,7 +120,7 @@ def summarise_group(entries: list, reference: dict | None = None) -> dict:
                 "responses": len(reference_values),
                 "median_ms": median_or_none(reference_values),
                 "percentiles_ms": percentiles(reference_values),
-                "comparison": median_difference_ci(values, reference_values),
+                "comparison": median_difference_ci(by_simulation[label], reference_values),
             }
         conditions.append(row)
 

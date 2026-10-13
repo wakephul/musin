@@ -137,29 +137,42 @@ def percentiles(samples, points=PAPER_PERCENTILES) -> list:
     return [round(float(value), 1) for value in np.percentile(np.asarray(samples, dtype=float), points)]
 
 
-def median_ci(samples, n_bootstrap: int = 2000, seed: int = 0, level: float = 0.95):
-    """Intervallo di confidenza della mediana per ricampionamento: (basso, alto), o None
-    con meno di due campioni."""
-    samples = np.asarray(samples, dtype=float)
-    if len(samples) < 2:
-        return None
-    rng = np.random.default_rng(seed)
-    medians = np.median(rng.choice(samples, size=(n_bootstrap, len(samples))), axis=1)
+def _resampled_medians(groups, n_bootstrap: int, rng):
+    """Mediane ricampionate di tempi raccolti in più simulazioni (`groups`: una lista di tempi
+    per simulazione). Si estraggono prima le simulazioni e poi i trial dentro ciascuna: i trial
+    di una simulazione condividono rete e rumore di fondo, quindi non sono indipendenti tra loro.
+    Con una sola simulazione resta il ricampionamento dei trial."""
+    groups = [np.asarray(group, dtype=float) for group in groups if len(group)]
+    inner = [rng.choice(group, size=(n_bootstrap, len(group))) for group in groups]
+    if len(groups) == 1:
+        return np.median(inner[0], axis=1)
+    chosen = rng.integers(len(groups), size=(n_bootstrap, len(groups)))
+    return np.array([np.median(np.concatenate([inner[j][i] for j in chosen[i]])) for i in range(n_bootstrap)])
+
+
+def _interval(values, level: float):
     tail = (1.0 - level) / 2.0 * 100.0
-    return [round(float(value), 1) for value in np.percentile(medians, [tail, 100.0 - tail])]
+    return [round(float(value), 1) for value in np.percentile(values, [tail, 100.0 - tail])]
 
 
-def median_difference_ci(samples, reference, n_bootstrap: int = 2000, seed: int = 0, level: float = 0.95):
-    """Differenza tra le mediane (campioni − riferimento) con il suo intervallo di confidenza,
-    ricampionando i due insiemi in modo indipendente. None se uno dei due ha meno di due valori."""
-    samples, reference = np.asarray(samples, dtype=float), np.asarray(reference, dtype=float)
+def median_ci(groups, n_bootstrap: int = 2000, seed: int = 0, level: float = 0.95):
+    """Intervallo di confidenza della mediana: [basso, alto], o None con meno di due tempi.
+    `groups` è una lista di tempi per simulazione (vedi _resampled_medians)."""
+    if sum(len(group) for group in groups) < 2:
+        return None
+    return _interval(_resampled_medians(groups, n_bootstrap, np.random.default_rng(seed)), level)
+
+
+def median_difference_ci(groups, reference, n_bootstrap: int = 2000, seed: int = 0, level: float = 0.95):
+    """Differenza tra le mediane (simulato − riferimento) con il suo intervallo di confidenza.
+    Il riferimento è un solo insieme di tempi e si ricampiona per trial. None se uno dei due ha meno di due valori."""
+    samples = np.concatenate([np.asarray(group, dtype=float) for group in groups]) if len(groups) else np.array([])
+    reference = np.asarray(reference, dtype=float)
     if len(samples) < 2 or len(reference) < 2:
         return None
     rng = np.random.default_rng(seed)
-    differences = (np.median(rng.choice(samples, size=(n_bootstrap, len(samples))), axis=1)
-                   - np.median(rng.choice(reference, size=(n_bootstrap, len(reference))), axis=1))
-    tail = (1.0 - level) / 2.0 * 100.0
-    low, high = (round(float(value), 1) for value in np.percentile(differences, [tail, 100.0 - tail]))
+    differences = _resampled_medians(groups, n_bootstrap, rng) - _resampled_medians([reference], n_bootstrap, rng)
+    low, high = _interval(differences, level)
     return {
         "difference_ms": round(float(np.median(samples) - np.median(reference)), 1),
         "ci95_ms": [low, high],
