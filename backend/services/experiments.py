@@ -43,11 +43,12 @@ def estimate_duration_ms(params: dict) -> float:
 
         if kind == "cerebellum_msi_race":
             train, test = _section(params, "train"), _section(params, "test")
+            # Stessi valori di default di worker/networks/cerebellum_msi_race.py.
             train_iti = train.get("iti_range_ms") or [500, 1000]
-            test_iti = test.get("iti_range_ms") or [1000, 2500]
+            test_iti = test.get("iti_range_ms") or [200, 400]
             return (
-                int(train.get("n_trials", 50)) * (float(train.get("trial_duration_ms", 1000.0)) + float(train_iti[1]))
-                + int(test.get("n_trials", 100)) * (float(test.get("trial_duration_ms", 1500.0)) + float(test_iti[1]))
+                int(train.get("n_trials", 45)) * (float(train.get("trial_duration_ms", 1000.0)) + float(train_iti[1]))
+                + int(test.get("n_trials", 100)) * (float(test.get("trial_duration_ms", 1000.0)) + float(test_iti[1]))
             )
 
         if kind == "trial_protocol":

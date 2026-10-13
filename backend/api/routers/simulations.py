@@ -89,7 +89,7 @@ def _check_stimulus_devices(db, params: dict, user_id: int) -> None:
         ).first()
         if not owned:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                422,
                 f"Il device '{device.get('id')}' non ha uno stimolo valido selezionato",
             )
 
@@ -109,19 +109,19 @@ def launch_simulation(
     try:
         parsed_params = json.loads(params)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"I parametri non sono JSON valido: {exc}") from exc
+        raise HTTPException(422, f"I parametri non sono JSON valido: {exc}") from exc
     if not isinstance(parsed_params, dict):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "I parametri devono essere un oggetto JSON")
+        raise HTTPException(422, "I parametri devono essere un oggetto JSON")
 
     try:
         total_duration_ms = estimate_duration_ms(parsed_params)
     except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(422, str(exc)) from exc
     if total_duration_ms <= 0:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "La durata totale della simulazione deve essere maggiore di 0")
+        raise HTTPException(422, "La durata totale della simulazione deve essere maggiore di 0")
     if total_duration_ms > settings.MAX_SIMULATION_MS:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            422,
             f"La simulazione durerebbe {total_duration_ms / 1000:.0f} s di tempo biologico: "
             f"il massimo è {settings.MAX_SIMULATION_MS / 1000:.0f} s",
         )

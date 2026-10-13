@@ -37,11 +37,11 @@ def upload_stimulus(
     ({"spike_trains": [[ms, ...], ...]}), così il worker non deve conoscere i formati."""
     raw = file.file.read(settings.MAX_STIMULUS_UPLOAD_BYTES + 1)
     if len(raw) > settings.MAX_STIMULUS_UPLOAD_BYTES:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "File troppo grande (massimo 20 MB)")
+        raise HTTPException(413, "File troppo grande (massimo 20 MB)")
     try:
         trains = parse_stimulus_file(file.filename or "", raw)
     except StimulusFormatError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(422, str(exc)) from exc
 
     object_name = f"stimuli/{current_user.id}/{uuid.uuid4()}.json"
     minio_service.upload_json(object_name, {"spike_trains": trains})
