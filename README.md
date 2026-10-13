@@ -146,7 +146,9 @@ The simulator still runs them one at a time.
 The campaign page shows, for each value of the parameter:
 
 - trials, responses and median response time per condition, with a 95 % confidence
-  interval obtained by resampling;
+  interval. It comes from resampling the simulations and then the trials of each: the
+  trials of one simulation share its network and its noise, so they are not
+  independent, and with few seeds the interval is wide;
 - the Race Model Inequality tested on all the trials together;
 - the response times at the percentiles 5 to 95, as a plot;
 - the medians of each simulation, to see how much they move from seed to seed.
@@ -298,7 +300,8 @@ and `AV`. Parameters that are negative, not finite or beyond the size limits are
 refused with a 422 and the reason.
 
 A campaign takes the same `params` as JSON, the seeds and, optionally, the parameter
-to vary as a dotted path into `params`:
+to vary as a dotted path into `params`; `"save_spikes": true` keeps the spikes of
+every simulation:
 
 ```bash
 curl -s -X POST http://localhost:3000/api/v1/campaigns \
