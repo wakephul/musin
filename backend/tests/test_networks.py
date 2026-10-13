@@ -46,6 +46,9 @@ def test_fork_copies_the_definition_and_remembers_the_parent(client, auth, netwo
     assert fork["parent_id"] == network["id"]
     assert fork["name"] == "Copia"
     assert fork["definition"] == network["definition"]
+    assert fork["description"] == network["description"]
+    noted = client.post(f"{API}/{network['id']}/fork", json={"version_notes": "prova con pesi diversi"}, headers=auth).json()
+    assert noted["description"] == "prova con pesi diversi"
 
 
 def test_delete_removes_the_network_and_its_simulations(client, auth, network, minio):
@@ -59,7 +62,7 @@ def test_delete_removes_the_network_and_its_simulations(client, auth, network, m
 def test_model_catalogue_lists_the_reference_models(client, auth):
     catalogue = client.get(f"{API}/models", headers=auth).json()
     neuron_ids = {neuron["id"] for module in catalogue["modules"] for neuron in module["neurons"]}
-    assert {"iaf_cond_exp", "parrot_neuron"} <= neuron_ids
+    assert {"iaf_cond_exp", "parrot_neuron", "poisson_generator", "dc_generator"} <= neuron_ids
     assert {device["id"] for device in catalogue["stimulus_devices"]} >= {"legacy_sensory_stimulus", "spike_train_stimulus"}
 
 

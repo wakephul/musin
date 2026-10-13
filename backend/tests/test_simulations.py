@@ -91,6 +91,7 @@ def test_results_are_built_from_the_files_the_worker_produced(client, auth, netw
 
     base = f"results/1/sim_{simulation_id}"
     for name in ("PC_A_raster.png", "PC_A_histogram.png", "GR_raster.png", "pop_X_raster.png",
+                 "exp_cond_raster.png", "diff_GR_PC_A.png",
                  "diff_DCN_A__DCN_B.png", "rmi_DCN_A.png", "exp_cond_weights.png",
                  "activation_test_DCN_AB.png", "cdf_test_DCN_AB.png", "spikes.json"):
         minio.objects[f"{base}/{name}"] = b"x"
@@ -102,9 +103,10 @@ def test_results_are_built_from_the_files_the_worker_produced(client, auth, netw
     assert [g["population_id"] for g in results["population_graphs"]] == ["GR", "PC_A", "pop_X"]
     assert results["population_graphs"][0]["histogram_url"] is None
     assert results["population_graphs"][1]["histogram_url"].endswith("PC_A_histogram.png")
-    assert results["differential_graphs"][0]["label"] == "DCN_A − DCN_B"
+    # Il nome nuovo (doppio underscore) e quello dei risultati vecchi danno la stessa etichetta.
+    assert [g["label"] for g in results["differential_graphs"]] == ["DCN_A − DCN_B", "GR − PC_A"]
     assert results["race_model_graphs"][0]["population"] == "DCN_A"
-    assert results["experiment_graphs"][0]["label"] == "cond weights"
+    assert [g["label"] for g in results["experiment_graphs"]] == ["cond raster", "cond weights"]
     assert {(g["kind"], g["pair"]) for g in results["response_graphs"]} == {("activation", "test_DCN_AB"), ("cdf", "test_DCN_AB")}
     assert results["accuracy_metrics"] == {"metrics": []}
     assert results["race_model_data"] is None
@@ -122,3 +124,19 @@ def test_delete_removes_only_that_simulation_results(client, auth, network, mini
     assert client.delete(f"{API}/{simulation_id}", headers=auth).status_code == 204
     assert list(minio.objects) == [f"{base}0/spikes.json"]
     assert client.get(f"{API}/{simulation_id}", headers=auth).status_code == 404
+
+
+def test_stimuli_uploaded_before_the_library_cannot_be_replayed(client, auth, network):
+    from backend.core.db import SessionLocal
+    from backend.models import Stimulus
+
+    owner_id = client.get("/api/v1/auth/me", headers=auth).json()["id"]
+    with SessionLocal() as db:
+        legacy = Stimulus(name="vecchio", file_path="stimuli/1/raw.h5", owner_id=owner_id)
+        db.add(legacy)
+        db.commit()
+        legacy_id = legacy.id
+    params = {**CONTINUOUS, "inputs": {"devices": [{"id": "S", "model": "spike_train_stimulus", "params": {"stimulus_id": legacy_id}}]}}
+    response = launch(client, auth, network, params)
+    assert response.status_code == 422
+    assert "caricalo di nuovo" in response.json()["detail"]

@@ -104,6 +104,8 @@ class NetworkUpdate(BaseModel):
 
 class NetworkFork(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    # Note sulla copia: diventano la sua descrizione (di default resta quella dell'originale).
+    version_notes: Optional[str] = None
 
 
 class NetworkResponse(BaseModel):

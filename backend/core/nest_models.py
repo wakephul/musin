@@ -46,6 +46,16 @@ MODEL_CATALOGUE = {
             ],
         },
         {
+            "id": "nest_generators",
+            "label": "Generatori (come popolazione della rete)",
+            "description": "Generatori NEST salvati con la rete: sempre attivi, non seguono il protocollo a trial.",
+            "neurons": [
+                {"id": "poisson_generator", "label": "Generatore di Poisson", "default_params": {"rate": 20.0}},
+                {"id": "dc_generator", "label": "Generatore di corrente continua", "default_params": {"amplitude": 100.0}},
+            ],
+            "synapses": [],
+        },
+        {
             "id": "cerebnest",
             "label": "CerebNEST (cervelletto)",
             "description": "Modelli EGLIF del microcircuito cerebellare.",

@@ -97,7 +97,7 @@ def fork_network(db: SessionDep, current_user: CurrentUser, network_id: int, bod
     original = _get_owned_network(db, network_id, current_user.id)
     fork = Network(
         name=(body.name if body and body.name else f"{original.name} (copia)"),
-        description=original.description,
+        description=(body.version_notes if body and body.version_notes else original.description),
         definition=copy.deepcopy(original.definition),
         parent_id=original.id,
         owner_id=current_user.id,

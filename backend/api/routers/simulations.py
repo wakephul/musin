@@ -84,13 +84,19 @@ def _check_stimulus_devices(db, params: dict, user_id: int) -> None:
         if device.get("model") != SPIKE_TRAIN_STIMULUS:
             continue
         stimulus_id = (device.get("params") or {}).get("stimulus_id")
-        owned = isinstance(stimulus_id, int) and db.query(Stimulus).filter(
+        stimulus = isinstance(stimulus_id, int) and db.query(Stimulus).filter(
             Stimulus.id == stimulus_id, Stimulus.owner_id == user_id
         ).first()
-        if not owned:
+        if not stimulus:
             raise HTTPException(
                 422,
                 f"Il device '{device.get('id')}' non ha uno stimolo valido selezionato",
+            )
+        # Gli stimoli caricati prima della libreria sono file grezzi che il worker non sa leggere.
+        if not (stimulus.definition or {}).get("n_trains"):
+            raise HTTPException(
+                422,
+                f"Lo stimolo '{stimulus.name}' è stato caricato con una versione precedente: caricalo di nuovo dalla pagina Stimoli",
             )
 
 
@@ -216,7 +222,8 @@ def get_simulation_results(db: SessionDep, current_user: CurrentUser, simulation
     # delle popolazioni della rete (gli esperimenti built-in possono usare altri nomi).
     network_order = [p["id"] for p in simulation.network.definition.get("topology", {}).get("populations", [])]
     recorded = sorted(
-        (name[:-len("_raster.png")] for name in files if name.endswith("_raster.png")),
+        # exp_*_raster.png è un grafico d'esperimento dei risultati più vecchi, non una popolazione.
+        (name[:-len("_raster.png")] for name in files if name.endswith("_raster.png") and not name.startswith("exp_")),
         key=lambda pop: (network_order.index(pop) if pop in network_order else len(network_order), pop),
     )
     population_graphs = [
@@ -224,11 +231,20 @@ def get_simulation_results(db: SessionDep, current_user: CurrentUser, simulation
         for pop in recorded
     ]
 
+    def differential_label(name: str) -> str:
+        """diff_<pop_a>__<pop_b>.png; i file più vecchi usano un solo underscore, che compare
+        anche dentro gli id: lì la coppia si riconosce dalle popolazioni della rete."""
+        if "__" in name:
+            return name.replace("__", " − ")
+        for pop_a in network_order:
+            if name.startswith(f"{pop_a}_") and name[len(pop_a) + 1:] in network_order:
+                return f"{pop_a} − {name[len(pop_a) + 1:]}"
+        return name
+
     differential_graphs, race_model_graphs, experiment_graphs, response_graphs = [], [], [], []
     for filename in sorted(files):
         if (name := stem(filename, "diff_")) is not None:
-            # diff_<pop_a>__<pop_b>.png; i file più vecchi usano un solo underscore e non sono separabili.
-            differential_graphs.append({"label": name.replace("__", " − "), "url": url(filename)})
+            differential_graphs.append({"label": differential_label(name), "url": url(filename)})
         elif (name := stem(filename, "rmi_")) is not None:
             race_model_graphs.append({"population": name, "url": url(filename)})
         elif (name := stem(filename, "exp_")) is not None:
