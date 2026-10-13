@@ -1,10 +1,10 @@
-import { Component, computed, input } from '@angular/core';
+import { Component, input } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
 import { ModelCatalogue, Population, Stimulus } from '../../../core/models';
 import { DifferentialPlotsComponent } from './differential-plots.component';
 import { ConditionDraft, DeviceDraft, TrialProtocolDraft } from './experiment-params';
-import { SEED, TRIAL_META, resolutionField } from './experiment-validation';
+import { SEED, TRIAL_META, RESOLUTION } from './experiment-validation';
 import { InputsEditorComponent } from './inputs-editor.component';
 import { ParamFieldComponent } from './param-field.component';
 
@@ -125,7 +125,7 @@ import { ParamFieldComponent } from './param-field.component';
         </div>
         <div class="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-4">
           <app-param-field fieldId="trial-seed" [meta]="seedMeta" [(value)]="draft().seed" />
-          <app-param-field fieldId="trial-resolution" [meta]="resolutionMeta()" [(value)]="draft().resolution" />
+          <app-param-field fieldId="trial-resolution" [meta]="resolutionMeta" [(value)]="draft().resolution" />
         </div>
       </div>
     </section>
@@ -203,7 +203,7 @@ export class TrialProtocolFormComponent {
 
   protected readonly meta = TRIAL_META;
   protected readonly seedMeta = SEED;
-  protected resolutionMeta = computed(() => resolutionField(this.draft().resolution));
+  protected readonly resolutionMeta = RESOLUTION;
 
   protected addCondition(): void {
     this.draft().conditions.push({ condition_label: '', devices: [], weight: 1, expected_winner: null });

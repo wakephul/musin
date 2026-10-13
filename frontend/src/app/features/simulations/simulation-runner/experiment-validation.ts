@@ -11,7 +11,6 @@ import {
   ExperimentParams,
   InputsDraft,
   MAX_SIMULATION_MS,
-  RESOLUTIONS,
   RULE_PARAMS,
   RunnerState,
   SENSORY_STIMULUS,
@@ -47,15 +46,6 @@ export const SEED: FieldMeta = {
   help: 'Seme dei generatori casuali: con lo stesso seed la simulazione si ripete identica.',
 };
 export const RESOLUTION = positive('Risoluzione (ms)', 'Passo di integrazione di NEST.');
-
-/** Scelta della risoluzione; un valore fuori elenco, arrivato da una simulazione precedente, resta selezionabile. */
-export function resolutionField(current: number): FieldMeta {
-  const values = RESOLUTIONS.includes(current) ? RESOLUTIONS : [...RESOLUTIONS, current];
-  return {
-    ...RESOLUTION,
-    options: values.map((value) => ({ value, label: Number.isInteger(value) ? value.toFixed(1) : String(value) })),
-  };
-}
 
 /** Sezioni annidate dei default; una stringa vuota significa che la sezione non ha un titolo proprio. */
 export const SECTION_LABELS: Record<string, string> = {

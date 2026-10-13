@@ -1,5 +1,4 @@
-import { JsonPipe } from '@angular/common';
-import { Component, computed, input } from '@angular/core';
+import { Component, computed, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 
@@ -20,7 +19,7 @@ import { ParamFieldComponent } from './param-field.component';
 @Component({
   selector: 'app-inputs-editor',
   standalone: true,
-  imports: [FormsModule, RouterLink, JsonPipe, ParamFieldComponent],
+  imports: [FormsModule, RouterLink, ParamFieldComponent],
   host: { class: 'block space-y-5' },
   template: `
     <section class="panel">
@@ -72,7 +71,7 @@ import { ParamFieldComponent } from './param-field.component';
               <p class="help">{{ text }}</p>
             }
           </div>
-          @for (key of keys(device.params); track key) {
+          @for (key of knownDeviceKeys(device); track key) {
             @if (key === 'stimulus_id') {
               <div class="w-72">
                 <label class="label" [for]="'device-' + i + '-stimulus'">Stimolo</label>
@@ -97,10 +96,23 @@ import { ParamFieldComponent } from './param-field.component';
                 [meta]="deviceMeta(key)"
                 [(value)]="device.params[key]"
               />
-            } @else {
-              <span class="tag mt-5">{{ key }} = {{ device.params[key] | json }}</span>
             }
           }
+          <div class="w-60">
+            <label class="label" [for]="'device-' + i + '-extra'">Altri parametri (JSON)</label>
+            <input
+              type="text"
+              class="input input-mono"
+              [id]="'device-' + i + '-extra'"
+              [value]="extraText(device.params, knownDeviceKeys(device))"
+              (change)="setExtra(device, device.params, knownDeviceKeys(device), $event)"
+              placeholder='es. {"start": 100, "stop": 500}'
+              spellcheck="false"
+            />
+            @if (extraErrors().get(device); as message) {
+              <p class="field-error">{{ message }}</p>
+            }
+          </div>
           <button type="button" class="btn btn-quiet btn-sm ml-auto mt-5" (click)="removeDevice(device)">Rimuovi</button>
         </div>
       } @empty {
@@ -112,11 +124,7 @@ import { ParamFieldComponent } from './param-field.component';
       <div class="panel-header">
         <div>
           <h2 class="section-title">Connessioni dei dispositivi</h2>
-          <p class="help">
-            Ogni connessione porta un dispositivo su una popolazione della rete con sinapsi
-            <span class="num">{{ staticSynapse }}</span
-            >.
-          </p>
+          <p class="help">Ogni connessione porta un dispositivo su una popolazione della rete. Un peso negativo è inibitorio.</p>
         </div>
         <button type="button" class="btn btn-sm" [disabled]="!inputs().devices.length" (click)="addConnection()">
           Aggiungi connessione
@@ -166,12 +174,32 @@ import { ParamFieldComponent } from './param-field.component';
               [(value)]="connection.params[key]"
             />
           }
-          @if (connection.synapse_model !== staticSynapse) {
-            <span class="tag mt-5">{{ connection.synapse_model }}</span>
-          }
-          @for (key of extraKeys(connection); track key) {
-            <span class="tag mt-5">{{ key }} = {{ connection.params[key] | json }}</span>
-          }
+          <div class="w-44">
+            <label class="label" [for]="'connection-' + i + '-synapse'">Sinapsi</label>
+            <select class="input num" [id]="'connection-' + i + '-synapse'" [(ngModel)]="connection.synapse_model">
+              @for (synapse of synapses(); track synapse.id) {
+                <option [value]="synapse.id">{{ synapse.id }}</option>
+              }
+              @if (!isSynapseListed(connection.synapse_model)) {
+                <option [value]="connection.synapse_model">{{ connection.synapse_model }} (non in elenco)</option>
+              }
+            </select>
+          </div>
+          <div class="w-60">
+            <label class="label" [for]="'connection-' + i + '-extra'">Altri parametri (JSON)</label>
+            <input
+              type="text"
+              class="input input-mono"
+              [id]="'connection-' + i + '-extra'"
+              [value]="extraText(connection.params, connectionParamKeys)"
+              (change)="setExtra(connection, connection.params, connectionParamKeys, $event)"
+              placeholder='es. {"receptor_type": 1}'
+              spellcheck="false"
+            />
+            @if (extraErrors().get(connection); as message) {
+              <p class="field-error">{{ message }}</p>
+            }
+          </div>
           <button type="button" class="btn btn-quiet btn-sm ml-auto mt-5" (click)="removeConnection(connection)">
             Rimuovi
           </button>
@@ -198,19 +226,59 @@ export class InputsEditorComponent {
   readonly hint = input.required<string>();
 
   protected readonly rules = CONNECTION_RULES;
-  protected readonly staticSynapse = STATIC_SYNAPSE;
   protected readonly connectionMeta = CONNECTION_PARAM_META;
+  protected readonly connectionParamKeys = Object.keys(CONNECTION_PARAM_META);
+  /** Errore di sintassi nel JSON degli altri parametri, per dispositivo o connessione. */
+  protected extraErrors = signal(new Map<object, string>());
 
   protected models = computed(() => this.catalogue()?.stimulus_devices ?? []);
+  /** Sinapsi del catalogo, senza i doppioni tra moduli. */
+  protected synapses = computed(() => {
+    const all = this.catalogue()?.modules.flatMap((module) => module.synapses) ?? [];
+    return all.filter((synapse, index) => all.findIndex((other) => other.id === synapse.id) === index);
+  });
   private synapseDefaults = computed(
-    () =>
-      this.catalogue()
-        ?.modules.flatMap((module) => module.synapses)
-        .find((synapse) => synapse.id === STATIC_SYNAPSE)?.default_params ?? { weight: 1, delay: 1 },
+    () => this.synapses().find((synapse) => synapse.id === STATIC_SYNAPSE)?.default_params ?? { weight: 1, delay: 1 },
   );
 
-  protected keys(params: Record<string, unknown>): string[] {
-    return Object.keys(params);
+  /** Parametri con un campo dedicato: quelli di default del modello. Gli altri stanno nel JSON. */
+  protected knownDeviceKeys(device: DeviceDraft): string[] {
+    const defaults = this.models().find((model) => model.id === device.model)?.default_params ?? {};
+    return Object.keys(defaults).filter((key) => key in device.params);
+  }
+
+  protected isSynapseListed(modelId: string): boolean {
+    return this.synapses().some((synapse) => synapse.id === modelId);
+  }
+
+  protected extraText(params: Record<string, unknown>, knownKeys: string[]): string {
+    const extra = Object.fromEntries(Object.entries(params).filter(([key]) => !knownKeys.includes(key)));
+    return Object.keys(extra).length ? JSON.stringify(extra) : '';
+  }
+
+  /** Sostituisce i parametri senza campo dedicato con quelli scritti nel JSON. */
+  protected setExtra(owner: object, params: Record<string, unknown>, knownKeys: string[], event: Event): void {
+    const text = (event.target as HTMLInputElement).value.trim();
+    const errors = new Map(this.extraErrors());
+    let extra: unknown = {};
+    try {
+      if (text) extra = JSON.parse(text);
+    } catch {
+      extra = null;
+    }
+    if (extra === null || typeof extra !== 'object' || Array.isArray(extra)) {
+      errors.set(owner, 'Serve un oggetto JSON, ad esempio {"start": 100}.');
+      this.extraErrors.set(errors);
+      return;
+    }
+    errors.delete(owner);
+    this.extraErrors.set(errors);
+    for (const key of Object.keys(params)) {
+      if (!knownKeys.includes(key)) delete params[key];
+    }
+    for (const [key, value] of Object.entries(extra)) {
+      if (!knownKeys.includes(key)) params[key] = value;
+    }
   }
 
   protected isNumeric(value: unknown): boolean {
@@ -242,11 +310,6 @@ export class InputsEditorComponent {
   protected connectionKeys(connection: ConnectionDraft): string[] {
     const ruleParam = RULE_PARAMS[connection.rule];
     return [...(ruleParam ? [ruleParam.key] : []), 'weight', 'delay'];
-  }
-
-  /** Altri parametri arrivati da una simulazione precedente: restano nel payload e si vedono qui. */
-  protected extraKeys(connection: ConnectionDraft): string[] {
-    return Object.keys(connection.params).filter((key) => !(key in CONNECTION_PARAM_META));
   }
 
   protected addDevice(): void {

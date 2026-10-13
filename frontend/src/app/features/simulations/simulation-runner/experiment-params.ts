@@ -25,7 +25,6 @@ export const BUILTIN_KINDS = Object.keys(BUILTIN_DEFAULTS) as BuiltinKind[];
 export const CONDITIONING_TRIAL_MS = 3000;
 export const MAX_SIMULATION_MS = 3_600_000;
 
-export const RESOLUTIONS = [0.1, 0.5, 1.0];
 export const STATIC_SYNAPSE = 'static_synapse';
 export const SPIKE_TRAIN_STIMULUS = 'spike_train_stimulus';
 export const SENSORY_STIMULUS = 'legacy_sensory_stimulus';
