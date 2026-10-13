@@ -1,5 +1,6 @@
 import itertools
 import shutil
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,11 +27,10 @@ def files():
 def queued_tasks(monkeypatch):
     """Sostituisce l'accodamento su Celery: restituisce gli id di simulazione accodati."""
     queued = []
-    task_ids = itertools.count(1)
 
     class FakeAsyncResult:
         def __init__(self):
-            self.id = f"task-{next(task_ids)}-{id(self)}"
+            self.id = uuid.uuid4().hex   # celery_task_id è unico nel database
 
     def fake_delay(simulation_id):
         queued.append(simulation_id)
