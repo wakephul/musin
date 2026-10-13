@@ -111,3 +111,14 @@ def test_race_model_without_responses_in_a_condition_still_reports_the_counts():
     assert (result["n_V"], result["n_A"], result["n_AV"]) == (1, 0, 1)
     assert result["trials"] == {"V": 1, "A": 1, "AV": 1}
     assert result["p_value"] is None and not result["has_facilitation"]
+
+
+def test_networks_of_one_simulation_and_of_the_next_do_not_share_a_seed():
+    """Con seed + 1 la seconda rete della simulazione 21 avrebbe il seed della prima rete della 22."""
+    from worker.networks.decision_making import _network_seed
+
+    assert [_network_seed(seed, 0) for seed in (21, 22, 23)] == [21, 22, 23]
+    second = [_network_seed(seed, 1) for seed in range(1, 200)]
+    assert len(set(second)) == len(second) and not set(second) & set(range(1, 400))
+    assert all(1 <= seed < 2**31 for seed in second)
+    assert _network_seed(21, 1) == _network_seed(21, 1)

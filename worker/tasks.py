@@ -93,6 +93,8 @@ def run_simulation_task(self: Task, simulation_id: int) -> dict:
             "sim_id": simulation_id,
             "network_definition": network_definition,
             "load_stimulus": load_stimulus,
+            # Nelle campagne gli spike non si salvano: una rete corticale ne produce 200 MB a simulazione.
+            "skip_files": () if exp_params.get("save_spikes", True) else ("spikes.json",),
         }
 
         try:

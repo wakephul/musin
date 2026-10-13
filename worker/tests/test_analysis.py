@@ -3,7 +3,8 @@ import pytest
 
 from worker.analysis import (
     PAPER_PERCENTILES, binned_rate, cf_gated_ltd, decide, ecdf, first_crossing, first_upward_crossing,
-    paired_race, percentiles, poisson_trains, race_model_inequality, snap, trailing_mean,
+    median_ci, median_difference_ci, paired_race, percentiles, poisson_trains, race_model_inequality, snap,
+    trailing_mean,
 )
 
 
@@ -134,3 +135,18 @@ def test_missed_trials_count_in_the_inequality_test():
     # Con una manciata di trial il test non si fa: una violazione piena non basta.
     few = race_model_inequality([300.0], [280.0], [200.0, 200.0], 1, 1, 2)
     assert few["max_violation"] == 1.0 and few["p_value"] is None and not few["significant"]
+
+
+def test_median_confidence_intervals():
+    rng = np.random.default_rng(3)
+    samples = rng.normal(320, 60, 400)
+    low, high = median_ci(samples)
+    assert low < np.median(samples) < high and high - low < 25
+    assert median_ci(samples) == median_ci(samples)          # stesso seed, stesso intervallo
+    assert median_ci([300.0]) is None and median_ci([]) is None
+
+    same = median_difference_ci(samples, rng.normal(320, 60, 400))
+    assert not same["differs"] and same["ci95_ms"][0] <= 0 <= same["ci95_ms"][1]
+    shifted = median_difference_ci(samples, rng.normal(260, 60, 400))
+    assert shifted["differs"] and 40 < shifted["difference_ms"] < 80
+    assert median_difference_ci(samples, [300.0]) is None

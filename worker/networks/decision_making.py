@@ -326,12 +326,21 @@ def _run_network(nest, name, cfg, par, sides, seed, store, prefix, progress):
     return response_times, details, mean_rate, spikes
 
 
+def _network_seed(seed: int, index: int) -> int:
+    """Seed della rete `index` di una simulazione. La prima usa quello dato; le altre uno
+    derivato, non seed + 1: quello è il seed della prima rete della simulazione successiva
+    di una campagna, e le due avrebbero lo stesso rumore di fondo."""
+    if index == 0:
+        return seed
+    return int(np.random.SeedSequence([seed, index]).generate_state(1)[0]) % (2**31 - 1) + 1
+
+
 def run_decision_making_experiment(sim_info, exp_params, storage, progress_cb):
     import nest
 
     cfg = {**DEFAULT_EXPERIMENT, **(exp_params.get("decision_making") or {})}
     par = {**DEFAULT_NETWORK_PARAMS, **(exp_params.get("network_overrides") or {}), "order": int(cfg["order"])}
-    store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
+    store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}", sim_info.get("skip_files", ()))
     seed = int(cfg["seed"])
 
     modality = cfg["modality"]
@@ -350,8 +359,7 @@ def run_decision_making_experiment(sim_info, exp_params, storage, progress_cb):
     for index, name in enumerate(networks):
         prefix = f"{name}_" if modality == "dual" else ""
         share = lambda fraction, phase, index=index: progress_cb(5 + 85 * (index + fraction) / len(networks), phase)
-        # Seed diversi: due reti con lo stesso rumore di fondo non sarebbero indipendenti.
-        rts, details, mean_rate, spikes = _run_network(nest, name, cfg, par, sides, seed + index, store, prefix, share)
+        rts, details, mean_rate, spikes = _run_network(nest, name, cfg, par, sides, _network_seed(seed, index), store, prefix, share)
         results[name] = {"response_times": rts, "details": details, "mean_rate": mean_rate}
         all_spikes.update({f"{prefix}{pop_id}": events for pop_id, events in spikes.items()})
 
@@ -394,6 +402,7 @@ def run_decision_making_experiment(sim_info, exp_params, storage, progress_cb):
             "percentile_levels": list(PAPER_PERCENTILES),
             "percentiles_ms": {"V": percentiles(answered["visual"]), "A": percentiles(answered["auditory"]),
                                "AV": percentiles(race)},
+            "reaction_times_ms": {"V": answered["visual"], "A": answered["auditory"], "AV": race},
             "max_rmi_violation": round(rmi["max_violation"], 4),
             "p_value": rmi["p_value"],
             "has_facilitation": rmi["significant"],

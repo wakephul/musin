@@ -91,7 +91,7 @@ def run_generic_experiment(sim_info, exp_params, storage, progress_cb):
     import nest
 
     topology = sim_info["network_definition"].get("topology", {})
-    store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
+    store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}", sim_info.get("skip_files", ()))
     resolution = float(exp_params.get("resolution", 0.1))
     seed = int(exp_params.get("seed", 1234))
     rng = np.random.default_rng(seed)

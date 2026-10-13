@@ -12,13 +12,17 @@ import matplotlib.pyplot as plt
 class ResultStore:
     """Salva ogni artefatto in `base_path` e ne tiene una copia in `graphs.zip`."""
 
-    def __init__(self, storage, base_path: str):
+    def __init__(self, storage, base_path: str, skip=()):
         self._storage = storage
         self.base_path = base_path
+        # File che questa simulazione non salva (gli spike, nelle campagne).
+        self._skip = frozenset(skip)
         self._zip_buffer = io.BytesIO()
         self._zip = zipfile.ZipFile(self._zip_buffer, "w", zipfile.ZIP_DEFLATED)
 
     def put(self, name: str, data: bytes, in_zip: bool = True) -> None:
+        if name in self._skip:
+            return
         # I nomi derivano dagli id di popolazione: un separatore di percorso farebbe
         # scrivere fuori dalla cartella di questa simulazione.
         if PurePosixPath(name).name != name or "\\" in name or name.startswith("."):
@@ -28,6 +32,8 @@ class ResultStore:
             self._zip.writestr(name, data)
 
     def put_json(self, name: str, obj, in_zip: bool = True) -> None:
+        if name in self._skip:   # prima di serializzare: gli spike possono pesare centinaia di MB
+            return
         self.put(name, json.dumps(obj, indent=2).encode("utf-8"), in_zip)
 
     def put_figure(self, name: str, fig=None, dpi: int = 150) -> None:

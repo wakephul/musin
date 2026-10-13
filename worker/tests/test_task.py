@@ -152,3 +152,19 @@ def test_result_names_cannot_leave_the_simulation_folder(files):
         with pytest.raises(ValueError):
             store.put(name, b"x")
     assert files.list("results") == []
+
+
+def test_campaign_simulations_do_not_save_their_spikes(monkeypatch, files, simulation_id):
+    def writes_results(sim_info, exp_params, storage, progress):
+        store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}", sim_info["skip_files"])
+        store.put_json("spikes.json", {"spikes": {}}, in_zip=False)
+        store.put_json("race_model.json", {"race_model": []})
+        store.close()
+
+    use_experiment(monkeypatch, writes_results)
+    with SessionLocal() as db:
+        simulation = db.get(Simulation, simulation_id)
+        simulation.experiment_params = {**simulation.experiment_params, "save_spikes": False}
+        db.commit()
+    tasks.run_simulation_task.run(simulation_id)
+    assert sorted(name.rsplit("/", 1)[-1] for name in files.list("results")) == ["graphs.zip", "race_model.json"]

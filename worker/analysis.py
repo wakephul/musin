@@ -137,6 +137,37 @@ def percentiles(samples, points=PAPER_PERCENTILES) -> list:
     return [round(float(value), 1) for value in np.percentile(np.asarray(samples, dtype=float), points)]
 
 
+def median_ci(samples, n_bootstrap: int = 2000, seed: int = 0, level: float = 0.95):
+    """Intervallo di confidenza della mediana per ricampionamento: (basso, alto), o None
+    con meno di due campioni."""
+    samples = np.asarray(samples, dtype=float)
+    if len(samples) < 2:
+        return None
+    rng = np.random.default_rng(seed)
+    medians = np.median(rng.choice(samples, size=(n_bootstrap, len(samples))), axis=1)
+    tail = (1.0 - level) / 2.0 * 100.0
+    return [round(float(value), 1) for value in np.percentile(medians, [tail, 100.0 - tail])]
+
+
+def median_difference_ci(samples, reference, n_bootstrap: int = 2000, seed: int = 0, level: float = 0.95):
+    """Differenza tra le mediane (campioni − riferimento) con il suo intervallo di confidenza,
+    ricampionando i due insiemi in modo indipendente. None se uno dei due ha meno di due valori."""
+    samples, reference = np.asarray(samples, dtype=float), np.asarray(reference, dtype=float)
+    if len(samples) < 2 or len(reference) < 2:
+        return None
+    rng = np.random.default_rng(seed)
+    differences = (np.median(rng.choice(samples, size=(n_bootstrap, len(samples))), axis=1)
+                   - np.median(rng.choice(reference, size=(n_bootstrap, len(reference))), axis=1))
+    tail = (1.0 - level) / 2.0 * 100.0
+    low, high = (round(float(value), 1) for value in np.percentile(differences, [tail, 100.0 - tail]))
+    return {
+        "difference_ms": round(float(np.median(samples) - np.median(reference)), 1),
+        "ci95_ms": [low, high],
+        # Lo zero fuori dall'intervallo: le due mediane differiscono oltre l'incertezza del campione.
+        "differs": not low <= 0.0 <= high,
+    }
+
+
 def paired_race(rt_first, rt_second) -> list:
     """Modello a gara del paper: per ogni coppia di trial risponde il canale più veloce.
     `None` è un trial senza risposta; la coppia manca solo se mancano entrambi."""

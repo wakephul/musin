@@ -479,6 +479,9 @@ def run_cerebellum_conditioning(sim_id_dict, exp_params, storage, progress_cb):
         'percentiles_ms': {'V': rt_percentiles['visual'], 'A': rt_percentiles['auditory'],
                            'AV': rt_percentiles['audiovisual'], 'race': rt_percentiles['race_model']},
         'percentiles_av_faster_than_race': faster_than_race,
+        # I tempi di ogni risposta: una campagna li mette insieme a quelli degli altri seed.
+        'reaction_times_ms': {'V': responses['visual'], 'A': responses['auditory'],
+                              'AV': responses['audiovisual'], 'race': race},
         'max_rmi_violation': 0.0,
         'p_value': None,
         'has_facilitation': False,
@@ -504,7 +507,7 @@ def run_cerebellum_conditioning(sim_id_dict, exp_params, storage, progress_cb):
     progress_cb(88, "Grafici")
     colors = {'auditory': '#f4a261', 'visual': '#457b9d', 'audiovisual': '#2a9d8f'}
 
-    store = ResultStore(storage, base_path)
+    store = ResultStore(storage, base_path, sim_id_dict.get('skip_files', ()))
 
     def _upload(fig, name):
         store.put_figure(name, fig, dpi=120)
