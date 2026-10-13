@@ -31,6 +31,16 @@ def get_available_models(current_user: CurrentUser) -> Dict[str, List[Dict[str, 
                         "default_params": {"V_m": -70.0, "E_L": -70.0, "C_m": 250.0, "tau_m": 10.0, "t_ref": 2.0, "V_th": -55.0, "V_reset": -70.0}
                     },
                     {
+                        "id": "iaf_cond_exp",
+                        "label": "Integrate-and-Fire (Conductance, Exponential)",
+                        "default_params": {"E_L": -70.0, "C_m": 250.0, "g_L": 16.7, "t_ref": 2.0, "V_th": -55.0, "V_reset": -60.0, "tau_syn_ex": 0.2, "tau_syn_in": 2.0}
+                    },
+                    {
+                        "id": "parrot_neuron",
+                        "label": "Parrot Neuron (Relay)",
+                        "default_params": {}
+                    },
+                    {
                         "id": "hh_psc_alpha",
                         "label": "Hodgkin-Huxley",
                         "default_params": {"V_m": -65.0, "E_L": -65.0, "C_m": 100.0, "t_ref": 2.0}

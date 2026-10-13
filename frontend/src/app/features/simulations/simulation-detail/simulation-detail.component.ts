@@ -18,6 +18,7 @@ import {
   RaceModelResult,
 } from '../../../core/services/simulation.service';
 import { NetworkService } from '../../../core/services/network.service';
+import { countNeurons, countSynapses } from '../../../core/utils/topology';
 
 @Component({
   selector: 'app-simulation-detail',
@@ -744,29 +745,13 @@ export class SimulationDetailComponent implements OnInit, OnDestroy {
     });
   }
 
-  /** Sum of population sizes. */
   networkNodeCount(): number {
-    const pops = this.networkData()?.definition?.topology?.populations ?? [];
-    return pops.reduce((a: number, p: any) => a + (Number(p.size) || 0), 0);
+    return countNeurons(this.networkData()?.definition?.topology?.populations);
   }
 
-  /** Estimated synapses from projection rules. */
   networkEdgeCount(): number {
-    const topo = this.networkData()?.definition?.topology;
-    const projs = topo?.projections ?? [];
-    const size: Record<string, number> = {};
-    (topo?.populations ?? []).forEach((p: any) => (size[p.id] = Number(p.size) || 0));
-    return projs.reduce((a: number, pr: any) => {
-      const s = size[pr.source] ?? 0, t = size[pr.target] ?? 0;
-      const indeg = Number(pr.indegree) || 0, outdeg = Number(pr.outdegree) || 0;
-      switch (pr.rule) {
-        case 'all_to_all':      return a + s * t;
-        case 'one_to_one':      return a + Math.min(s, t);
-        case 'fixed_indegree':  return a + indeg * t;
-        case 'fixed_outdegree': return a + outdeg * s;
-        default:                return a + s * t;
-      }
-    }, 0);
+    const topology = this.networkData()?.definition?.topology;
+    return countSynapses(topology?.populations, topology?.projections);
   }
 
   networkPopulations(): any[] {

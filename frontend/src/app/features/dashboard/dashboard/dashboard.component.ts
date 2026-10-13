@@ -6,6 +6,7 @@ import { forkJoin } from 'rxjs';
 import { NetworkService } from '../../../core/services/network.service';
 import { SimulationService } from '../../../core/services/simulation.service';
 import { PROTOCOL_PRESETS, ProtocolPreset } from '../../../core/data/presets';
+import { countNeurons, countSynapses } from '../../../core/utils/topology';
 
 @Component({
   selector: 'app-dashboard',
@@ -398,32 +399,12 @@ export class DashboardComponent implements OnInit {
 
   /** Total neurons = sum of population sizes (falls back to stored nodes_count). */
   getNodeCount(net: any): number {
-    const pops = net?.definition?.topology?.populations;
-    if (Array.isArray(pops) && pops.length) {
-      return pops.reduce((acc: number, p: any) => acc + (Number(p.size) || 0), 0);
-    }
-    return this.getProp(net, 'nodes_count');
+    return countNeurons(net?.definition?.topology?.populations);
   }
 
-  /** Estimated synapses from the projection rules (falls back to stored edges_count). */
   getEdgeCount(net: any): number {
-    const topo = net?.definition?.topology;
-    const pops = topo?.populations;
-    const projs = topo?.projections;
-    if (!Array.isArray(projs) || !projs.length) return this.getProp(net, 'edges_count');
-    const size: Record<string, number> = {};
-    (pops ?? []).forEach((p: any) => (size[p.id] = Number(p.size) || 0));
-    return projs.reduce((acc: number, pr: any) => {
-      const s = size[pr.source] ?? 0, t = size[pr.target] ?? 0;
-      const indeg = Number(pr.indegree) || 0, outdeg = Number(pr.outdegree) || 0;
-      switch (pr.rule) {
-        case 'all_to_all':      return acc + s * t;
-        case 'one_to_one':      return acc + Math.min(s, t);
-        case 'fixed_indegree':  return acc + indeg * t;
-        case 'fixed_outdegree': return acc + outdeg * s;
-        default:                return acc + s * t;
-      }
-    }, 0);
+    const topology = net?.definition?.topology;
+    return countSynapses(topology?.populations, topology?.projections);
   }
 
   getShortId(id: string): string {

@@ -15,6 +15,7 @@ import {
 } from '../../../core/services/network.service';
 import { CytoscapeViewerComponent } from '../../../shared/components/cytoscape-viewer/cytoscape-viewer/cytoscape-viewer.component';
 import { NETWORK_PRESETS, NetworkPreset } from '../../../core/data/presets';
+import { countNeurons, countSynapses } from '../../../core/utils/topology';
 
 @Component({
   selector: 'app-network-builder',
@@ -200,6 +201,11 @@ import { NETWORK_PRESETS, NetworkPreset } from '../../../core/data/presets';
                             <option value="" disabled>
                               Seleziona un modello...
                             </option>
+                            @if (isUnlistedNeuronModel(pop.get('neuron_model')?.value)) {
+                              <option [value]="pop.get('neuron_model')?.value">
+                                {{ pop.get('neuron_model')?.value }} (non in elenco)
+                              </option>
+                            }
                             @for (mod of availableModules(); track mod.id) {
                               <optgroup [label]="mod.label">
                                 @for (n of mod.neurons; track n.id) {
@@ -507,14 +513,17 @@ export class NetworkBuilderComponent implements OnInit {
           }));
         });
         (topo.projections ?? []).forEach((proj: any) => {
+          // indegree/outdegree sono salvati dentro params: li spostiamo nei campi
+          // dedicati, così c'è un solo punto in cui modificarli.
+          const { indegree, outdegree, ...params } = proj.params ?? {};
           this.projections.push(this.fb.group({
             source: [proj.source, Validators.required],
             target: [proj.target, Validators.required],
             rule: [proj.rule, Validators.required],
-            indegree: [proj.indegree ?? 100],
-            outdegree: [proj.outdegree ?? 100],
+            indegree: [indegree ?? 100],
+            outdegree: [outdegree ?? 100],
             synapse_model: [proj.synapse_model ?? 'static_synapse', Validators.required],
-            params: [asStr(proj.params)],
+            params: [asStr(params)],
           }));
         });
         if (this.populations.length === 0) this.addPopulation();
@@ -592,6 +601,11 @@ export class NetworkBuilderComponent implements OnInit {
     this.projections.removeAt(index);
   }
 
+  isUnlistedNeuronModel(modelId: string | null | undefined): boolean {
+    if (!modelId) return false;
+    return !this.availableModules().some((m) => m.neurons.some((n: any) => n.id === modelId));
+  }
+
   onNeuronModelChange(index: number) {
     const selectedModelId = this.populations
       .at(index)
@@ -660,29 +674,6 @@ export class NetworkBuilderComponent implements OnInit {
     this.graphElements.set([...nodes, ...edges]);
   }
 
-  // Parser robusto che valida il JSON inserito dall'utente e rimpacchetta le regole
-  /** Total neurons = sum of population sizes. */
-  private countNodes(populations: any[]): number {
-    return (populations ?? []).reduce((acc, p) => acc + (Number(p.size) || 0), 0);
-  }
-
-  /** Estimated synapses from the projection rules. */
-  private countEdges(populations: any[], projections: any[]): number {
-    const size: Record<string, number> = {};
-    (populations ?? []).forEach((p) => (size[p.id] = Number(p.size) || 0));
-    return (projections ?? []).reduce((acc, pr) => {
-      const s = size[pr.source] ?? 0, t = size[pr.target] ?? 0;
-      const indeg = Number(pr.indegree) || 0, outdeg = Number(pr.outdegree) || 0;
-      switch (pr.rule) {
-        case 'all_to_all':      return acc + s * t;
-        case 'one_to_one':      return acc + Math.min(s, t);
-        case 'fixed_indegree':  return acc + indeg * t;
-        case 'fixed_outdegree': return acc + outdeg * s;
-        default:                return acc + s * t;
-      }
-    }, 0);
-  }
-
   private parseAdvancedParams(itemsArray: any[], context: string) {
     return itemsArray.map((item) => {
       const p = { ...item };
@@ -700,13 +691,11 @@ export class NetworkBuilderComponent implements OnInit {
         p.params = {};
       }
 
-      // Se è una proiezione, iniettiamo "indegree" o "outdegree" dentro a params per NEST
-      if (p.rule === 'fixed_indegree' && p.indegree !== undefined)
-        p.params.indegree = p.indegree;
-      if (p.rule === 'fixed_outdegree' && p.outdegree !== undefined)
-        p.params.outdegree = p.outdegree;
-
-      // Puliamo il root object per mandare un payload immacolato al backend
+      // Il backend e il worker leggono indegree/outdegree da params.
+      delete p.params.indegree;
+      delete p.params.outdegree;
+      if (p.rule === 'fixed_indegree') p.params.indegree = Number(p.indegree);
+      if (p.rule === 'fixed_outdegree') p.params.outdegree = Number(p.outdegree);
       delete p.indegree;
       delete p.outdegree;
 
@@ -760,8 +749,8 @@ export class NetworkBuilderComponent implements OnInit {
     const payload = {
       name: asCopy ? `${formVal.name ?? 'Rete Biologica'} (copia)` : (formVal.name ?? 'Rete Biologica'),
       description: formVal.description ?? '',
-      nodes_count: this.countNodes(parsedPopulations),
-      edges_count: this.countEdges(parsedPopulations, parsedProjections),
+      nodes_count: countNeurons(parsedPopulations),
+      edges_count: countSynapses(parsedPopulations, parsedProjections),
       params: parsedBioParams,
       topology: {
         populations: parsedPopulations,
