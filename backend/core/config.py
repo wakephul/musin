@@ -1,43 +1,62 @@
-import os
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+INSECURE_SECRET_KEYS = {
+    "super-secret-key-change-in-production",
+    "change_me_generate_with_openssl_rand_hex_32",
+}
+
+
 class Settings(BaseSettings):
-    # API Settings
     PROJECT_NAME: str = "MuSiN API"
     API_V1_STR: str = "/api/v1"
-    
-    # Security Settings
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "super-secret-key-change-in-production")
+    ENVIRONMENT: str = "development"
+
+    SECRET_KEY: str = "super-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
 
-    # Default Admin Settings (per il rilascio in produzione)
-    FIRST_SUPERUSER_EMAIL: str = os.getenv("FIRST_SUPERUSER_EMAIL", "admin@musin.local")
-    FIRST_SUPERUSER_PASSWORD: str = os.getenv("FIRST_SUPERUSER_PASSWORD", "admin")
+    # Il frontend parla con l'API attraverso lo stesso host (nginx o proxy di ng serve):
+    # servono origini CORS solo se l'API viene chiamata da un altro dominio.
+    CORS_ORIGINS: str = ""
+    ALLOW_REGISTRATION: bool = True
 
-    # MySQL Database Settings
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL", 
-        "mysql+pymysql://root:password@localhost:3306/musin_db"
-    )
+    FIRST_SUPERUSER_EMAIL: str = "admin@musin.local"
+    FIRST_SUPERUSER_PASSWORD: str = "admin"
 
-    # Celery & Redis Settings
-    CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-    CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+    DATABASE_URL: str = "mysql+pymysql://root:password@localhost:3306/musin_db"
 
-    # MinIO Storage Settings
-    MINIO_URL: str = os.getenv("MINIO_URL", "minio:9000")
-    MINIO_EXTERNAL_URL: str = os.getenv("MINIO_EXTERNAL_URL", "localhost:9000")
-    MINIO_ACCESS_KEY: str = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-    MINIO_SECRET_KEY: str = os.getenv("MINIO_SECRET_KEY", "minioadmin")
-    MINIO_BUCKET_NAME: str = os.getenv("MINIO_BUCKET_NAME", "musin-storage")
-    MINIO_SECURE: bool = os.getenv("MINIO_SECURE", "False").lower() == "true"
+    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
+
+    MINIO_URL: str = "minio:9000"
+    MINIO_EXTERNAL_URL: str = "localhost:9000"
+    MINIO_ACCESS_KEY: str = "minioadmin"
+    MINIO_SECRET_KEY: str = "minioadmin"
+    MINIO_BUCKET_NAME: str = "musin-storage"
+    MINIO_SECURE: bool = False
+
+    # Tetto al tempo biologico di una singola simulazione (1 ora): evita che un
+    # parametro sbagliato occupi il worker per giorni.
+    MAX_SIMULATION_MS: float = 3_600_000.0
+    MAX_STIMULUS_UPLOAD_BYTES: int = 20 * 1024 * 1024
 
     model_config = SettingsConfigDict(
-        env_file=".env", 
-        env_file_encoding="utf-8", 
+        env_file=".env",
+        env_file_encoding="utf-8",
         case_sensitive=True,
-        extra="ignore"
+        extra="ignore",
     )
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @model_validator(mode="after")
+    def _refuse_default_secrets_outside_development(self) -> "Settings":
+        if self.ENVIRONMENT != "development" and self.SECRET_KEY in INSECURE_SECRET_KEYS:
+            raise ValueError("SECRET_KEY è quella di esempio: generane una con `openssl rand -hex 32`.")
+        return self
+
 
 settings = Settings()
