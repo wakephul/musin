@@ -82,7 +82,7 @@ services:
     build:
       context: .
       dockerfile: infrastructure/Dockerfile.engine
-    command: celery -A worker.celery_app worker --loglevel=info --pool=solo --max-memory-per-child=18000000
+    command: celery -A worker.celery_app worker --loglevel=info --pool=solo
     deploy:
       resources:
         limits:

@@ -1,11 +1,13 @@
 import gc
+import importlib
 import io
 import json
 import random
 import logging
+import time
 import numpy as np
 from celery import Task
-from billiard.exceptions import Terminated
+from sqlalchemy import select
 from worker.celery_app import celery_app
 from backend.api.deps import SessionLocal
 from backend.models import Simulation, SimulationStatus, Network
@@ -16,6 +18,27 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
+
+ABORT_CHECK_INTERVAL_S = 2.0
+
+
+class SimulationAborted(Exception):
+    """La simulazione è stata interrotta (o eliminata) mentre il worker la eseguiva."""
+
+
+def _is_aborted(simulation_id: int) -> bool:
+    # Sessione dedicata: quella del task è dentro una transazione REPEATABLE READ
+    # e non vedrebbe lo stato scritto dall'API.
+    with SessionLocal() as session:
+        status = session.scalar(select(Simulation.status).where(Simulation.id == simulation_id))
+    return status is None or status == SimulationStatus.ABORTED
+
+
+BUILTIN_EXPERIMENTS = {
+    "decision_making": ("worker.networks.decision_making", "run_decision_making_experiment"),
+    "cerebellum_conditioning": ("worker.networks.cerebellum_conditioning", "run_cerebellum_conditioning"),
+    "cerebellum_msi_race": ("worker.networks.cerebellum_msi_race", "run_cerebellum_msi_race"),
+}
 
 NEST_CONN_KEYS = {"indegree", "outdegree", "p", "mask", "kernel", "allow_autapses", "allow_multapses"}
 
@@ -110,62 +133,45 @@ def run_simulation_task(
         if not network:
             return {"error": "Network not found in DB"}
 
+        if simulation.status == SimulationStatus.ABORTED:
+            return {"status": "ABORTED"}
+
         simulation.status = SimulationStatus.RUNNING
         db.add(simulation)
         db.commit()
 
-        # --- DISPATCH: built-in first-class experiments ---
-        # Some experiments (e.g. the Wang audiovisual decision network) cannot be
-        # expressed through the generic population/projection JSON contract
-        # because they rely on computed PSP-normalized weights, multisynapse
-        # receptors and analytic noise rates. They run via dedicated worker
-        # modules that manage their own NEST kernel + analysis.
-        network_params = (network.definition.get("params", {}) or {})
-        builtin = exp_params.get("builtin") or network_params.get("builtin")
+        base_path = f"results/{simulation.owner_id}/sim_{simulation_id}"
+        last_abort_check = time.monotonic()
+
         def _progress(pct, phase):
+            # Il pool "solo" di Celery non può revocare un task in corso: l'interruzione
+            # è cooperativa, il worker rilegge lo stato a ogni avanzamento.
+            nonlocal last_abort_check
+            now = time.monotonic()
+            if now - last_abort_check >= ABORT_CHECK_INTERVAL_S:
+                last_abort_check = now
+                if _is_aborted(simulation_id):
+                    raise SimulationAborted()
             self.update_state(state="PROGRESS", meta={"current": int(pct), "total": 100, "phase": phase})
 
-        if builtin == "decision_making":
-            from worker.networks.decision_making import run_decision_making_experiment
-
-            base_path = f"results/{simulation.owner_id}/sim_{simulation_id}"
-            run_decision_making_experiment(
-                self,
-                {"owner_id": simulation.owner_id, "sim_id": simulation_id},
-                exp_params,
-                minio_service,
-                _progress,
-            )
+        def _complete():
+            if _is_aborted(simulation_id):
+                raise SimulationAborted()
             simulation.results_path = base_path
             simulation.status = SimulationStatus.COMPLETED
             db.add(simulation)
             db.commit()
-            logger.info(f"Esperimento built-in '{builtin}' completato per sim {simulation_id}.")
+            logger.info(f"Simulazione {simulation_id} completata.")
             return {"status": "COMPLETED"}
 
-        if builtin == "cerebellum_conditioning":
-            from worker.networks.cerebellum_conditioning import run_cerebellum_conditioning
-
-            base_path = f"results/{simulation.owner_id}/sim_{simulation_id}"
-            run_cerebellum_conditioning(
-                self,
-                {"owner_id": simulation.owner_id, "sim_id": simulation_id},
-                exp_params,
-                minio_service,
-                _progress,
-            )
-            simulation.results_path = base_path
-            simulation.status = SimulationStatus.COMPLETED
-            db.add(simulation)
-            db.commit()
-            logger.info(f"Esperimento built-in '{builtin}' completato per sim {simulation_id}.")
-            return {"status": "COMPLETED"}
-
-        if builtin == "cerebellum_msi_race":
-            from worker.networks.cerebellum_msi_race import run_cerebellum_msi_race
-
-            base_path = f"results/{simulation.owner_id}/sim_{simulation_id}"
-            run_cerebellum_msi_race(
+        # Gli esperimenti built-in non passano dal contratto generico
+        # popolazioni/proiezioni: costruiscono la propria rete NEST e la propria analisi.
+        network_params = (network.definition.get("params", {}) or {})
+        builtin = exp_params.get("builtin") or network_params.get("builtin")
+        if builtin in BUILTIN_EXPERIMENTS:
+            module_name, function_name = BUILTIN_EXPERIMENTS[builtin]
+            run_experiment = getattr(importlib.import_module(module_name), function_name)
+            run_experiment(
                 self,
                 {
                     "owner_id": simulation.owner_id,
@@ -176,12 +182,7 @@ def run_simulation_task(
                 minio_service,
                 _progress,
             )
-            simulation.results_path = base_path
-            simulation.status = SimulationStatus.COMPLETED
-            db.add(simulation)
-            db.commit()
-            logger.info(f"Esperimento built-in '{builtin}' completato per sim {simulation_id}.")
-            return {"status": "COMPLETED"}
+            return _complete()
 
         import nest
         nest.ResetKernel()
@@ -472,8 +473,7 @@ def run_simulation_task(
                 remaining_time = round(remaining_time - current_chunk, _res_ndec)
                 current_time_simulated += current_chunk
                 
-                percent = int((current_time_simulated / total_time) * 100)
-                self.update_state(state='PROGRESS', meta={'current': percent, 'total': 100, 'phase': phase_name})
+                _progress((current_time_simulated / total_time) * 100, phase_name)
                 
                 gc.collect()
 
@@ -539,7 +539,6 @@ def run_simulation_task(
             del events
             gc.collect()
 
-        base_path = f"results/{simulation.owner_id}/sim_{simulation_id}"
         zip_path = f"{base_path}/graphs.zip"
 
         file_bytes = json.dumps(simulation_results).encode("utf-8")
@@ -946,24 +945,14 @@ def run_simulation_task(
         zip_buf.seek(0)
         minio_service.upload_file(io.BytesIO(zip_buf.getvalue()), len(zip_buf.getvalue()), zip_path, "application/zip")
 
-        simulation.results_path = base_path 
-        simulation.status = SimulationStatus.COMPLETED
-        db.add(simulation)
-        db.commit()
+        return _complete()
         
-        logger.info(f"Simulazione {simulation_id} completata con metriche e grafici aggiornati!")
-        return {"status": "COMPLETED"}
-        
-    except Terminated:
+    except SimulationAborted:
         db.rollback()
-        simulation = db.query(Simulation).filter(Simulation.id == simulation_id).first()
-        if simulation:
-            simulation.status = SimulationStatus.ABORTED
-            db.add(simulation)
-            db.commit()
-        logger.info(f"Task Celery {self.request.id} terminato forzatamente dall'utente.")
-        raise
-        
+        minio_service.delete_directory(base_path)
+        logger.info(f"Simulazione {simulation_id} interrotta dall'utente.")
+        return {"status": "ABORTED"}
+
     except Exception as e:
         db.rollback()
         simulation = db.query(Simulation).filter(Simulation.id == simulation_id).first()

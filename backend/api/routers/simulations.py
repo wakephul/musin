@@ -163,20 +163,13 @@ def abort_simulation(id: str, db: SessionDep, current_user: CurrentUser) -> dict
             detail=f"Impossibile interrompere. La simulazione è già in stato {simulation.status.value}"
         )
     
-    if simulation.celery_task_id:
-        try:
-            # Invio del segnale SIGKILL protetto da blocco try
-            celery_app.control.revoke(simulation.celery_task_id, terminate=True, signal='SIGKILL')
-        except Exception as e:
-            # Logghiamo l'errore del broker ma forziamo comunque lo stato DB per consistenza UI
-            print(f"Errore durante l'invio del segnale SIGKILL a Celery: {e}")
-        
+    # Il worker rilegge lo stato a ogni avanzamento e si ferma da solo
+    # (vedi worker.tasks._is_aborted): niente revoke, che con il pool "solo" non ha effetto.
     simulation.status = SimulationStatus.ABORTED
     db.add(simulation)
     db.commit()
     
-    # Restituiamo un payload utile al frontend per aggiornare la UI all'istante
-    return {"message": "Simulazione interrotta con successo", "status": "ABORTED"}
+    return {"message": "Simulazione interrotta", "status": "ABORTED"}
 
 @router.get("/{id}/results")
 def get_simulation_results(id: str, db: SessionDep, current_user: CurrentUser) -> dict:
