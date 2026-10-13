@@ -9,7 +9,7 @@ import numpy as np
 from celery import Task
 from sqlalchemy import select
 from worker.celery_app import celery_app
-from backend.api.deps import SessionLocal
+from backend.core.db import SessionLocal
 from backend.models import Simulation, SimulationStatus, Network
 from backend.services.minio_client import minio_service
 import zipfile
@@ -111,27 +111,15 @@ def apply_trial_logic_v2(raw_spikes_list: list, trial_windows: list, trial_seque
     return filtered_trains
 
 @celery_app.task(bind=True, name="worker.tasks.run_simulation_task")
-def run_simulation_task(
-    self: Task, 
-    simulation_id: int, 
-    duration_ms: float = 1000.0, 
-    experiment_params_str: str = "{}"
-) -> dict:
-    
+def run_simulation_task(self: Task, simulation_id: int) -> dict:
     db = SessionLocal()
     try:
-        try:
-            exp_params = json.loads(experiment_params_str)
-        except Exception:
-            exp_params = {}
-
-        simulation = db.query(Simulation).filter(Simulation.id == simulation_id).first()
+        simulation = db.get(Simulation, simulation_id)
         if not simulation:
-            return {"error": "Simulation not found in DB"}
-
-        network = db.query(Network).filter(Network.id == simulation.network_id).first()
-        if not network:
-            return {"error": "Network not found in DB"}
+            return {"status": "ABORTED"}
+        network = db.get(Network, simulation.network_id)
+        exp_params = simulation.experiment_params or {}
+        duration_ms = simulation.duration_ms
 
         if simulation.status == SimulationStatus.ABORTED:
             return {"status": "ABORTED"}
@@ -953,15 +941,15 @@ def run_simulation_task(
         logger.info(f"Simulazione {simulation_id} interrotta dall'utente.")
         return {"status": "ABORTED"}
 
-    except Exception as e:
+    except Exception as exc:
         db.rollback()
-        simulation = db.query(Simulation).filter(Simulation.id == simulation_id).first()
+        logger.exception(f"Simulazione {simulation_id} fallita")
+        simulation = db.get(Simulation, simulation_id)
         if simulation:
             simulation.status = SimulationStatus.FAILED
-            db.add(simulation)
+            simulation.error_message = f"{type(exc).__name__}: {exc}"[:2000]
             db.commit()
-        logger.error(f"Errore critico durante la simulazione {simulation_id}: {e}")
         raise
-        
+
     finally:
         db.close()
