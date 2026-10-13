@@ -2,185 +2,181 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+@layer base {
+  html {
+    font-size: 14px;
+  }
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+  }
+  h1, h2, h3 {
+    @apply font-semibold text-ink;
+  }
+  a {
+    @apply text-accent underline-offset-2 hover:underline;
+  }
+  :focus-visible {
+    @apply outline outline-2 outline-offset-2 outline-accent;
+  }
+  code, pre, kbd {
+    @apply font-mono;
+  }
 }
-
-html,
-body {
-  font-family: var(--font-sans);
-}
-
-body {
-  @apply bg-slate-50 text-slate-900 antialiased;
-  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
-}
-
-.font-mono,
-code,
-pre {
-  font-family: var(--font-mono);
-}
-
-/* ============================================================
-   MuSiN design system — cinematic shell + clinical surfaces
-   ============================================================ */
 
 @layer components {
-  /* Frosted glass panel (dark shell contexts) */
-  .glass-dark {
-    @apply bg-slate-900/70 backdrop-blur-xl border border-white/10;
+  /* Pagina */
+  .page {
+    @apply mx-auto w-full max-w-6xl px-5 py-6;
+  }
+  .page-header {
+    @apply mb-5 flex flex-wrap items-end justify-between gap-3;
+  }
+  .page-title {
+    @apply text-xl font-semibold leading-tight;
+  }
+  .page-subtitle {
+    @apply mt-1 text-muted;
+  }
+  .section-title {
+    @apply text-base font-semibold;
+  }
+  .breadcrumb {
+    @apply mb-2 text-xs text-muted;
   }
 
-  /* Frosted glass panel (light contexts) */
-  .glass-light {
-    @apply bg-white/80 backdrop-blur-xl border border-white/60;
+  /* Pannelli */
+  .panel {
+    @apply rounded-md border border-line bg-surface;
+  }
+  .panel-header {
+    @apply flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3;
+  }
+  .panel-body {
+    @apply p-4;
   }
 
-  /* Section card used across content pages */
-  .surface-card {
-    @apply bg-white rounded-2xl border border-slate-200/80 shadow-[0_1px_3px_rgba(15,23,42,0.04),0_12px_32px_-12px_rgba(15,23,42,0.12)];
+  /* Pulsanti */
+  .btn {
+    @apply inline-flex cursor-pointer select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink no-underline transition-colors hover:bg-canvas hover:no-underline disabled:cursor-not-allowed disabled:opacity-50;
   }
-
-  /* Primary gradient CTA */
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 font-semibold text-white
-           bg-gradient-to-br from-blue-600 to-indigo-600
-           hover:from-blue-500 hover:to-indigo-500
-           shadow-lg shadow-blue-600/20 transition-all
-           disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none;
+    @apply border-accent bg-accent text-white hover:border-accent-strong hover:bg-accent-strong;
+  }
+  .btn-danger {
+    @apply border-danger/40 text-danger hover:bg-danger-soft;
+  }
+  .btn-quiet {
+    @apply border-transparent bg-transparent text-muted hover:bg-canvas hover:text-ink;
+  }
+  .btn-sm {
+    @apply px-2 py-1 text-xs;
   }
 
-  .btn-ghost {
-    @apply inline-flex items-center justify-center gap-2 font-semibold
-           text-slate-600 bg-white border border-slate-200
-           hover:border-slate-300 hover:bg-slate-50 transition-all;
+  /* Form */
+  .label {
+    @apply mb-1 block text-xs font-medium text-muted;
+  }
+  .input {
+    @apply block w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm text-ink placeholder:text-faint focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent disabled:bg-canvas disabled:text-muted;
+  }
+  .input-mono {
+    @apply font-mono text-xs leading-relaxed;
+  }
+  .input.ng-invalid.ng-touched {
+    @apply border-danger;
+  }
+  .help {
+    @apply mt-1 text-xs text-muted;
+  }
+  .field-error {
+    @apply mt-1 text-xs text-danger;
+  }
+  .checkbox {
+    @apply h-4 w-4 rounded border-line text-accent accent-accent;
+  }
+
+  /* Tabelle */
+  .table-list {
+    @apply w-full border-collapse text-sm;
+  }
+  .table-list th {
+    @apply border-b border-line px-4 py-2 text-left text-xs font-medium text-muted;
+  }
+  .table-list td {
+    @apply border-b border-line px-4 py-2.5 align-middle;
+  }
+  .table-list tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .table-list tbody tr:hover td {
+    @apply bg-canvas;
+  }
+  .num {
+    @apply font-mono tabular-nums;
+  }
+
+  /* Stato di una simulazione: punto colorato + testo */
+  .status {
+    @apply inline-flex items-center gap-1.5 text-sm text-muted;
+  }
+  .status::before {
+    content: '';
+    @apply inline-block h-2 w-2 rounded-full bg-faint;
+  }
+  .status-completed {
+    @apply text-ok;
+  }
+  .status-completed::before {
+    @apply bg-ok;
+  }
+  .status-running, .status-pending {
+    @apply text-warn;
+  }
+  .status-running::before, .status-pending::before {
+    @apply bg-warn;
+  }
+  .status-failed {
+    @apply text-danger;
+  }
+  .status-failed::before {
+    @apply bg-danger;
+  }
+
+  /* Etichette, messaggi, schede */
+  .tag {
+    @apply inline-block rounded border border-line bg-canvas px-1.5 py-0.5 font-mono text-xs text-muted;
+  }
+  .notice {
+    @apply rounded-md border border-line bg-canvas px-3 py-2 text-sm;
+  }
+  .notice-error {
+    @apply border-danger/30 bg-danger-soft text-danger;
+  }
+  .notice-ok {
+    @apply border-ok/30 bg-ok/10 text-ok;
+  }
+  .tabs {
+    @apply flex gap-5 border-b border-line;
+  }
+  .tab {
+    @apply -mb-px cursor-pointer border-b-2 border-transparent pb-2 text-sm text-muted hover:text-ink;
+  }
+  .tab-active {
+    @apply border-accent font-medium text-ink;
+  }
+  .empty {
+    @apply px-4 py-8 text-center text-sm text-muted;
+  }
+  .code-block {
+    @apply overflow-x-auto rounded-md border border-line bg-canvas p-3 font-mono text-xs leading-relaxed;
+  }
+  .progress {
+    @apply h-1.5 w-full overflow-hidden rounded-full bg-line;
+  }
+  .progress > span {
+    @apply block h-full bg-accent transition-[width] duration-500;
+  }
+  .figure {
+    @apply block w-full rounded-md border border-line bg-white;
   }
 }
-
-/* ============================================================
-   Cinematic backdrop — animated aurora mesh (login / hero)
-   ============================================================ */
-
-.aurora {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  background: radial-gradient(120% 120% at 50% 0%, #0b1220 0%, #060912 60%, #030509 100%);
-}
-
-.aurora::before,
-.aurora::after {
-  content: '';
-  position: absolute;
-  width: 60vw;
-  height: 60vw;
-  border-radius: 50%;
-  filter: blur(90px);
-  opacity: 0.55;
-  will-change: transform;
-}
-
-.aurora::before {
-  top: -20%;
-  left: -10%;
-  background: radial-gradient(circle, #2563eb 0%, transparent 65%);
-  animation: aurora-drift-a 18s ease-in-out infinite alternate;
-}
-
-.aurora::after {
-  bottom: -25%;
-  right: -10%;
-  background: radial-gradient(circle, #7c3aed 0%, transparent 65%);
-  animation: aurora-drift-b 22s ease-in-out infinite alternate;
-}
-
-@keyframes aurora-drift-a {
-  0%   { transform: translate3d(0, 0, 0) scale(1); }
-  100% { transform: translate3d(12vw, 8vh, 0) scale(1.18); }
-}
-
-@keyframes aurora-drift-b {
-  0%   { transform: translate3d(0, 0, 0) scale(1.1); }
-  100% { transform: translate3d(-10vw, -6vh, 0) scale(1); }
-}
-
-/* Subtle grid overlay for depth */
-.grid-overlay {
-  background-image:
-    linear-gradient(to right, rgba(148, 163, 184, 0.06) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
-  background-size: 44px 44px;
-}
-
-/* ============================================================
-   Entrance animations
-   ============================================================ */
-
-@keyframes fade-rise {
-  from { opacity: 0; transform: translateY(12px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-.animate-fade-rise {
-  animation: fade-rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.animate-fade-in {
-  animation: fade-in 0.5s ease both;
-}
-
-.delay-100 { animation-delay: 0.1s; }
-.delay-200 { animation-delay: 0.2s; }
-.delay-300 { animation-delay: 0.3s; }
-
-@media (prefers-reduced-motion: reduce) {
-  .aurora::before,
-  .aurora::after,
-  .animate-fade-rise,
-  .animate-fade-in {
-    animation: none !important;
-  }
-}
-
-/* ============================================================
-   Custom scrollbar (referenced across components)
-   ============================================================ */
-
-.custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
-.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(100, 116, 139, 0.35);
-  border-radius: 9999px;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.55);
-}
-
-/* ============================================================
-   Icon-button tooltip (used in dashboard/network/simulation actions)
-   ============================================================ */
-.tooltip {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  background: #1e293b;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 3px 8px;
-  border-radius: 6px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s ease;
-  z-index: 30;
-}
-.group:hover > .tooltip { opacity: 1; }
