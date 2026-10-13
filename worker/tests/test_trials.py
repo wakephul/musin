@@ -1,7 +1,7 @@
 import numpy as np
 
 from worker.networks.cerebellum_msi_race import adapt_legacy_topology, make_windows
-from worker.networks.generic import Trial, build_trials, decision_metrics, stimulus_spike_trains
+from worker.networks.generic import Trial, build_trials, decision_metrics, race_model, stimulus_spike_trains
 
 PROTOCOL = {
     "num_trials": 40,
@@ -97,3 +97,17 @@ def test_legacy_eglif_networks_are_adapted_and_new_ones_left_alone():
 
     modern = {"populations": [{"id": "GR", "size": 1, "neuron_model": "iaf_cond_exp", "params": {}}], "projections": []}
     assert adapt_legacy_topology(modern) == (modern, False)
+
+
+def test_race_model_without_responses_in_a_condition_still_reports_the_counts():
+    """Senza risposte in una condizione la disuguaglianza non si calcola, ma il risultato
+    resta: la pagina deve poter dire quale condizione è rimasta vuota."""
+    trials = [
+        Trial(0.0, 50.0, 100.0, 0.0, ["V"], "V", None),
+        Trial(100.0, 150.0, 200.0, 0.0, ["A"], "A", None),
+        Trial(200.0, 250.0, 300.0, 0.0, ["V", "A"], "AV", None),
+    ]
+    result = race_model(None, "GR", [10.0, 220.0], trials)   # nessuno spike nel trial A
+    assert (result["n_V"], result["n_A"], result["n_AV"]) == (1, 0, 1)
+    assert result["trials"] == {"V": 1, "A": 1, "AV": 1}
+    assert result["p_value"] is None and not result["has_facilitation"]

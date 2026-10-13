@@ -375,25 +375,28 @@ def race_model(store, pop_id, times, trials):
         in_trial = times[(times >= trial.start) & (times <= trial.end)]
         if len(in_trial):
             latencies[trial.label].append(float(in_trial.min() - trial.start))
-    if not all(latencies.values()):
-        logger.warning("Race model su %s saltato: servono risposte nelle condizioni V, A e AV", pop_id)
-        return None
-
-    rmi = race_model_inequality(latencies["V"], latencies["A"], latencies["AV"],
-                                trial_counts["V"], trial_counts["A"], trial_counts["AV"])
-    plot_race_model(store, f"rmi_{pop_id}.png", rmi, latencies, trial_counts,
-                    f"Race Model Inequality: {pop_id}", "Latenza del primo spike (ms)")
-    return {
+    result = {
         "population": pop_id,
         "method": "first_spike_latency",
         "n_V": len(latencies["V"]), "n_A": len(latencies["A"]), "n_AV": len(latencies["AV"]),
         "trials": trial_counts,
         "median_rt_ms": {condition: median_or_none(values) for condition, values in latencies.items()},
         "reaction_times_ms": {condition: [round(v, 1) for v in values] for condition, values in latencies.items()},
-        "max_rmi_violation": round(rmi["max_violation"], 4),
-        "p_value": rmi["p_value"],
-        "has_facilitation": rmi["significant"],
+        "max_rmi_violation": 0.0,
+        "p_value": None,
+        "has_facilitation": False,
     }
+    if not all(latencies.values()):
+        # Il risultato resta, con i conteggi: la pagina dice quale condizione è senza risposte.
+        logger.warning("Race model su %s non calcolato: servono risposte nelle condizioni V, A e AV", pop_id)
+        return result
+
+    rmi = race_model_inequality(latencies["V"], latencies["A"], latencies["AV"],
+                                trial_counts["V"], trial_counts["A"], trial_counts["AV"])
+    plot_race_model(store, f"rmi_{pop_id}.png", rmi, latencies, trial_counts,
+                    f"Race Model Inequality: {pop_id}", "Latenza del primo spike (ms)")
+    return {**result, "max_rmi_violation": round(rmi["max_violation"], 4), "p_value": rmi["p_value"],
+            "has_facilitation": rmi["significant"]}
 
 
 def plot_percentile_cdf(store, filename, title, series: dict) -> None:
