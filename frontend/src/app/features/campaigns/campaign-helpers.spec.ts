@@ -32,6 +32,7 @@ describe('campaign helpers', () => {
     expect(campaignState(counts({ COMPLETED: 2, FAILED: 1 })).label).toBe('Completata in parte');
     expect(campaignState(counts({ FAILED: 2, ABORTED: 1 })).label).toBe('Fallita');
     expect(campaignState(counts({ ABORTED: 3 })).label).toBe('Interrotta');
+    expect(campaignState(counts({})).label).toBe('Senza simulazioni');
     expect(isActive(counts({ COMPLETED: 3 }))).toBe(false);
     expect(isActive(counts({ COMPLETED: 2, PENDING: 1 }))).toBe(true);
   });
@@ -64,6 +65,9 @@ describe('campaign helpers', () => {
       'network_overrides.eta_ex',
     );
     expect(sweepLabel({ ...campaign, sweep: null })).toBeNull();
+    // Una campagna creata dall'API può non avere il parametro tra quelli comuni: l'etichetta si trova lo stesso.
+    const fromApi = { params: { builtin: 'decision_making', decision_making: {} }, sweep: { path: 'decision_making.auditory_latency_ms', values: [1, 2] } };
+    expect(sweepLabel(fromApi as unknown as Campaign)).toBe('Latenza uditiva (ms)');
   });
 
   it('draws one curve per condition with enough responses, plus the reference ones', () => {

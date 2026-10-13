@@ -2,7 +2,7 @@
 
 import { Campaign, CampaignGroup, SimulationStatus } from '../../core/models';
 import { formatNumber, formatValue, plural } from '../../core/utils/format';
-import { sweepOptions } from '../simulations/simulation-runner/campaign-draft';
+import { parameterLabel } from '../simulations/simulation-runner/campaign-draft';
 
 export const CONDITION_LABELS: Record<string, string> = {
   A: 'Uditivo',
@@ -28,6 +28,8 @@ export function campaignState(counts: Counts): {
   className: string;
 } {
   const total = totalOf(counts);
+  // Tutte le simulazioni eliminate una per una.
+  if (!total) return { label: 'Senza simulazioni', className: 'status' };
   if (isActive(counts)) {
     const started = counts.RUNNING + counts.COMPLETED + counts.FAILED + counts.ABORTED > 0;
     return started
@@ -62,8 +64,7 @@ export function seedsText(seeds: number[]): string {
 /** Nome del parametro variabile come lo mostra il modulo di lancio; il percorso se il modulo non lo ha. */
 export function sweepLabel(campaign: Campaign): string | null {
   if (!campaign.sweep) return null;
-  const path = campaign.sweep.path;
-  return sweepOptions(campaign.params).find((option) => option.path === path)?.label ?? path;
+  return parameterLabel(campaign.params, campaign.sweep.path);
 }
 
 export function valueText(value: number | null): string {

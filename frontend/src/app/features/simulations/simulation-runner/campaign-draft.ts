@@ -65,18 +65,24 @@ function metaTable(params: ExperimentParams): Record<string, FieldMeta> {
   return BUILTIN_META[kind];
 }
 
+/** Etichetta di un parametro dal suo percorso, come nel modulo: "Test: Latenza uditiva (ms)". Il percorso stesso se il modulo non lo ha. */
+export function parameterLabel(params: ExperimentParams, path: string): string {
+  const keys = path.split('.');
+  const label = metaTable(params)[keys[keys.length - 1]]?.label;
+  if (!label) return path;
+  const section = keys.length > 1 ? SECTION_LABELS[keys[0]] : '';
+  return section ? `${section}: ${label}` : label;
+}
+
 /** Parametri numerici del lancio che si possono variare, con l'etichetta che hanno nel modulo. */
 export function sweepOptions(params: ExperimentParams): { path: string; label: string }[] {
-  const table = metaTable(params);
   const seed = seedPath(params);
   const walk = (section: Record<string, any>, prefix: string): { path: string; label: string }[] =>
     Object.entries(section).flatMap(([key, value]) => {
       const path = `${prefix}${key}`;
       if (isRecord(value)) return path.split('.').length < 4 ? walk(value, `${path}.`) : [];
       if (typeof value !== 'number' || path === seed) return [];
-      const sectionLabel = prefix ? SECTION_LABELS[prefix.split('.')[0]] : '';
-      const label = table[key]?.label ?? key;
-      return [{ path, label: sectionLabel ? `${sectionLabel}: ${label}` : label }];
+      return [{ path, label: parameterLabel(params, path) }];
     });
   return walk(params, '');
 }

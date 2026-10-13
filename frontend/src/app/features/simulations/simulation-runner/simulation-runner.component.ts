@@ -13,7 +13,6 @@ import { apiErrorMessage } from '../../../core/utils/errors';
 import { formatNumber, plural } from '../../../core/utils/format';
 import { countNeurons } from '../../../core/utils/topology';
 import {
-  campaignDurationMs,
   campaignMembers,
   emptyCampaign,
   isCampaign,
@@ -311,10 +310,11 @@ export class SimulationRunnerComponent {
     const blockers = validateState(this.state, { populations: this.populations(), stimuli: this.stimuli() ?? null });
     const campaignBlockers = validateCampaign(params, this.campaign);
     // Con una campagna non valida il totale non ha senso: si mostra la durata di una simulazione.
-    const ms = campaignBlockers.length ? estimateDurationMs(params) : campaignDurationMs(params, this.campaign);
+    const members = campaignBlockers.length ? [params] : campaignMembers(params, this.campaign);
+    const ms = members.reduce((total, member) => total + estimateDurationMs(member), 0);
     return {
       duration: Number.isFinite(ms) && ms > 0 ? `${formatNumber(ms / 1000, 1, 0)} s` : null,
-      simulations: campaignBlockers.length ? 1 : campaignMembers(params, this.campaign).length,
+      simulations: members.length,
       upperBound: kind === 'cerebellum_msi_race' || (kind === 'trial_protocol' && this.state.trials.iti_random),
       campaign: isCampaign(this.campaign),
       sweepOptions: sweepOptions(params),

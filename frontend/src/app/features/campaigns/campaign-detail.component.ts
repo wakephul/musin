@@ -408,8 +408,8 @@ const REFRESH_MS = 5000;
                           }
                           <p class="help">
                             Tempi di
-                            {{ simulationsText(group.simulations) }} messi insieme. Intervalli di confidenza per ricampionamento
-                            (2000 volte).
+                            {{ simulationsText(group.simulations) }} messi insieme. Intervalli di confidenza al 95% per
+                            ricampionamento, 2000 volte, delle simulazioni e dei trial di ciascuna.
                           </p>
                         </div>
                         <app-percentile-chart
