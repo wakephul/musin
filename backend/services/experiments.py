@@ -77,6 +77,22 @@ def _check_devices(params: dict) -> None:
         _count(device, "size", 1, maximum=MAX_SOURCES, name="size")
 
 
+def _check_stimuli_pool(protocol: dict, params: dict) -> None:
+    """Senza condizioni il protocollo girerebbe a vuoto, senza dirlo: ogni trial resterebbe senza stimolo."""
+    pool = protocol.get("stimuli_pool")
+    if not isinstance(pool, list) or not pool or not all(isinstance(entry, dict) for entry in pool):
+        raise ExperimentParamsError("'stimuli_pool' deve elencare almeno una condizione")
+    known = {device.get("id") for device in _section(params, "inputs").get("devices") or []}
+    total = 0.0
+    for entry in pool:
+        total += _number(entry, "weight", 1.0, name="weight")
+        devices = entry.get("devices") or []
+        if not isinstance(devices, list) or any(device not in known for device in devices):
+            raise ExperimentParamsError("Una condizione usa un dispositivo che non è tra quelli di ingresso")
+    if total <= 0:
+        raise ExperimentParamsError("Almeno una condizione deve avere un peso maggiore di zero")
+
+
 def estimate_duration_ms(params: dict) -> float:
     """Controlla i parametri che fissano dimensioni e durata e restituisce il tempo biologico
     totale in ms. Solleva ExperimentParamsError con un messaggio leggibile se non sono validi.
@@ -122,6 +138,7 @@ def estimate_duration_ms(params: dict) -> float:
         trial_ms = _number(protocol, "trial_duration_ms", 1000.0, minimum=1.0)
         _number(protocol, "stimulus_duration_ms", trial_ms, maximum=trial_ms)
         iti = _iti_upper(protocol, None, "iti_range_ms") if protocol.get("iti_range_ms") else _number(protocol, "iti_ms", 0.0)
+        _check_stimuli_pool(protocol, params)
         return trials * (trial_ms + iti)
 
     phases = _section(params, "phases")
