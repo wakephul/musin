@@ -183,7 +183,13 @@ const REFRESH_MS = 5000;
               } @else if (!summary()) {
                 <p class="empty" role="status">Caricamento…</p>
               } @else if (!summary()!.completed) {
-                <p class="empty">Nessuna simulazione completata: i tempi di risposta compaiono dopo la prima.</p>
+                <p class="empty">
+                  @if (active()) {
+                    Nessuna simulazione completata: i tempi di risposta compaiono dopo la prima.
+                  } @else {
+                    Nessuna simulazione completata: non ci sono tempi di risposta.
+                  }
+                </p>
               } @else if (!hasGroups()) {
                 <p class="empty">
                   Questo esperimento non produce tempi di risposta per condizione. I risultati sono nelle singole simulazioni, qui
@@ -319,9 +325,9 @@ const REFRESH_MS = 5000;
                       <h3 class="subsection-title">
                         <span [class.num]="!group.population.includes(' ')">{{ group.population }}</span>
                         @if (c.sweep) {
-                          <span class="font-normal text-muted">
-                            , {{ sweepName() }} <span class="num">{{ valueOf(point()!.value) }}</span></span
-                          >
+                          <span class="ml-2 font-normal text-muted">
+                            {{ sweepName() }} <span class="num">{{ valueOf(point()!.value) }}</span>
+                          </span>
                         }
                       </h3>
                       <div class="space-y-4">
