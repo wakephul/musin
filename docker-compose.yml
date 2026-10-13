@@ -28,7 +28,9 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # MinIO non pubblica più questa immagine su Docker Hub: funziona solo dove è già
+    # in cache. Altrove va indicata in MINIO_IMAGE una build di cui ci si fida.
+    image: ${MINIO_IMAGE:-minio/minio}
     env_file:
       - .env
     command: server /data --console-address ":9001"
