@@ -33,6 +33,8 @@ export function countSynapses(
         return total + (Number(proj.params?.['indegree']) || 0) * target;
       case 'fixed_outdegree':
         return total + (Number(proj.params?.['outdegree']) || 0) * source;
+      case 'pairwise_bernoulli':
+        return total + Math.round((Number(proj.params?.['p']) || 0) * source * target);
       default:
         return total + source * target;
     }

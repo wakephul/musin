@@ -1,165 +1,71 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { Observable, timer } from 'rxjs';
-import { switchMap } from 'rxjs/operators';
+import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
+import { EMPTY, Observable, throwError, timer } from 'rxjs';
+import { catchError, switchMap, takeWhile } from 'rxjs/operators';
 
-export interface SimulationLaunchResponse {
-  simulation_id: string;
-}
+import {
+  FINAL_STATUSES,
+  Simulation,
+  SimulationPage,
+  SimulationProgress,
+  SimulationResults,
+  SimulationStatus,
+} from '../models';
 
-export interface SimulationStatus {
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABORTED';
-  progress: number;
-  message?: string;
-  network_id?: string;
-  experiment_params?: any;
-}
+const POLL_INTERVAL_MS = 2000;
 
-export interface PopulationGraph {
-  population_id: string;
-  raster_url: string;
-  histogram_url: string;
-}
-
-export interface DifferentialGraph {
-  label: string;
-  url: string;
-}
-
-export interface TrialDetail {
-  trial: number;
-  active_stimuli: string[];
-  condition_label?: string;
-  expected_winner: string;
-  actual_winner: string;
-  is_correct: boolean;
-  net_evidence: number;
-}
-
-export interface AccuracyMetric {
-  comparison: string;
-  accuracy_percent: number;
-  total_valid_trials: number;
-  correct_trials: number;
-  trial_details: TrialDetail[];
-}
-
-export interface AccuracyMetricsData {
-  metrics: AccuracyMetric[];
-}
-
-export interface RaceModelResult {
-  population: string;
-  n_V: number;
-  n_A: number;
-  n_AV: number;
-  max_rmi_violation: number;
-  has_facilitation: boolean;
-}
-
-export interface RaceModelGraph {
-  population: string;
-  url: string;
-}
-
-export interface RaceModelData {
-  race_model: RaceModelResult[];
-}
-
-export interface ExperimentGraph {
-  label: string;
-  url: string;
-}
-
-export interface ResponseGraph {
-  kind: 'activation' | 'cdf';
-  pair: string;
-  url: string;
-}
-
-export interface SimulationResult {
-  raw_file_url: string;
-  graphs_zip_url: string;
-  population_graphs: PopulationGraph[];
-  network_id?: string;
-  network_name?: string;
-  duration_ms?: number;
-  experiment_params?: any;
-  differential_graphs?: DifferentialGraph[];
-  accuracy_metrics?: AccuracyMetricsData;
-  race_model_graphs?: RaceModelGraph[];
-  race_model_data?: RaceModelData;
-  experiment_graphs?: ExperimentGraph[];
-  experiment_metrics?: any;
-  response_graphs?: ResponseGraph[];
-  response_analysis?: any;
-}
-
-// INTERFACCIA PER LO STORICO
-export interface SimulationItem {
-  id: string;
-  network_id: string;
-  status: string;
-  created_at: string;
-}
-
-@Injectable({
-  providedIn: 'root',
-})
+@Injectable({ providedIn: 'root' })
 export class SimulationService {
   private http = inject(HttpClient);
   private readonly API_URL = '/api/v1/simulations';
 
-  launchSimulation(
-    networkId: string,
-    experimentParams: any, // Le durate ora sono qui dentro!
-    stimulusFile?: File,
-  ): Observable<SimulationLaunchResponse> {
+  getSimulations(options: { skip?: number; limit?: number; status?: SimulationStatus | null } = {}): Observable<SimulationPage> {
+    let params = new HttpParams().set('skip', options.skip ?? 0).set('limit', options.limit ?? 20);
+    if (options.status) params = params.set('status', options.status);
+    return this.http.get<SimulationPage>(this.API_URL, { params });
+  }
+
+  getSimulation(id: number | string): Observable<Simulation> {
+    return this.http.get<Simulation>(`${this.API_URL}/${id}`);
+  }
+
+  launchSimulation(networkId: number | string, experimentParams: Record<string, unknown>, name?: string): Observable<{ simulation_id: number }> {
     const formData = new FormData();
-    formData.append('network_id', networkId);
-
-    // Passiamo l'intero protocollo (fasi incluse) come JSON
+    formData.append('network_id', String(networkId));
     formData.append('params', JSON.stringify(experimentParams));
+    if (name) formData.append('name', name);
+    return this.http.post<{ simulation_id: number }>(`${this.API_URL}/launch`, formData);
+  }
 
-    if (stimulusFile) {
-      formData.append('stimuli', stimulusFile);
-    }
-    return this.http.post<SimulationLaunchResponse>(
-      `${this.API_URL}/launch`,
-      formData,
+  getStatus(id: number | string): Observable<SimulationProgress> {
+    return this.http.get<SimulationProgress>(`${this.API_URL}/${id}/status`);
+  }
+
+  /**
+   * Stato ogni 2 s finché la simulazione non è in uno stato finale (incluso).
+   * Un errore passeggero salta un giro senza chiudere lo stream; un 404
+   * (simulazione eliminata) lo chiude con errore.
+   */
+  pollStatus(id: number | string): Observable<SimulationProgress> {
+    return timer(0, POLL_INTERVAL_MS).pipe(
+      switchMap(() =>
+        this.getStatus(id).pipe(
+          catchError((error: HttpErrorResponse) => (error.status === 404 ? throwError(() => error) : EMPTY)),
+        ),
+      ),
+      takeWhile((progress) => !FINAL_STATUSES.includes(progress.status), true),
     );
   }
 
-  getStatus(simulationId: string): Observable<SimulationStatus> {
-    return this.http.get<SimulationStatus>(
-      `${this.API_URL}/${simulationId}/status`,
-    );
+  abortSimulation(id: number | string): Observable<unknown> {
+    return this.http.post(`${this.API_URL}/${id}/abort`, {});
   }
 
-  abortSimulation(simulationId: string): Observable<void> {
-    return this.http.post<void>(`${this.API_URL}/${simulationId}/abort`, {});
+  getResults(id: number | string): Observable<SimulationResults> {
+    return this.http.get<SimulationResults>(`${this.API_URL}/${id}/results`);
   }
 
-  getResults(simulationId: string): Observable<SimulationResult> {
-    return this.http.get<SimulationResult>(
-      `${this.API_URL}/${simulationId}/results`,
-    );
-  }
-
-  pollStatus(simulationId: string): Observable<SimulationStatus> {
-    return timer(0, 2000).pipe(switchMap(() => this.getStatus(simulationId)));
-  }
-
-  getSimulations(
-    skip: number = 0,
-    limit: number = 100,
-  ): Observable<SimulationItem[]> {
-    return this.http.get<SimulationItem[]>(
-      `${this.API_URL}?skip=${skip}&limit=${limit}`,
-    );
-  }
-
-  deleteSimulation(id: string): Observable<void> {
+  deleteSimulation(id: number | string): Observable<void> {
     return this.http.delete<void>(`${this.API_URL}/${id}`);
   }
 }

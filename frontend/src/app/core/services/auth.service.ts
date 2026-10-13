@@ -1,89 +1,71 @@
-import { Injectable, signal, computed, inject } from '@angular/core';
-import { HttpClient, HttpParams, HttpHeaders } from '@angular/common/http';
-import { tap, catchError } from 'rxjs/operators';
-import { Observable, throwError } from 'rxjs';
+import { Injectable, computed, inject, signal } from '@angular/core';
+import { HttpClient, HttpParams } from '@angular/common/http';
+import { Observable } from 'rxjs';
+import { map, tap } from 'rxjs/operators';
 
-export interface User {
-  id: string;
-  username: string;
-  email?: string;
-  role: string;
-}
+import { AuthResponse, User } from '../models';
 
-interface AuthResponse {
-  access_token: string;
-  token_type: string;
-  user: User; // Obbligatorio ora che il backend lo invia
-}
+const TOKEN_KEY = 'musin_token';
+const USER_KEY = 'musin_user';
 
-@Injectable({
-  providedIn: 'root',
-})
+@Injectable({ providedIn: 'root' })
 export class AuthService {
   private http = inject(HttpClient);
+  private readonly API_URL = '/api/v1/auth';
 
-  // Stato atomico con Signals
-  private tokenSignal = signal<string | null>(
-    localStorage.getItem('musin_token'),
-  );
-  private userSignal = signal<User | null>(null);
+  private token = signal<string | null>(localStorage.getItem(TOKEN_KEY));
+  private user = signal<User | null>(this.readStoredUser());
 
-  // Computed signals per la UI
-  public isAuthenticated = computed(() => !!this.tokenSignal());
-  public currentUser = computed(() => this.userSignal());
+  readonly isAuthenticated = computed(() => !!this.token());
+  readonly currentUser = this.user.asReadonly();
 
-  constructor() {
-    // Idratazione dello stato dell'utente all'avvio (F5)
-    const savedUser = localStorage.getItem('musin_user');
-    if (savedUser && savedUser !== 'undefined') {
-      try {
-        this.userSignal.set(JSON.parse(savedUser));
-      } catch (e) {
-        this.logout();
-      }
-    }
+  login(email: string, password: string): Observable<AuthResponse> {
+    const body = new HttpParams().set('username', email).set('password', password);
+    return this.http.post<AuthResponse>(`${this.API_URL}/login`, body).pipe(tap((res) => this.storeSession(res)));
   }
 
-  login(credentials: any): Observable<AuthResponse> {
-    // Preparazione payload x-www-form-urlencoded
-    const body = new HttpParams()
-      .set('username', credentials.username)
-      .set('password', credentials.password);
-
-    const headers = new HttpHeaders({
-      'Content-Type': 'application/x-www-form-urlencoded',
-    });
-
+  register(email: string, password: string): Observable<AuthResponse> {
     return this.http
-      .post<AuthResponse>('/api/v1/auth/login', body.toString(), { headers })
-      .pipe(
-        tap((response) => {
-          // 1. Persistenza Token
-          this.tokenSignal.set(response.access_token);
-          localStorage.setItem('musin_token', response.access_token);
+      .post<AuthResponse>(`${this.API_URL}/register`, { email, password })
+      .pipe(tap((res) => this.storeSession(res)));
+  }
 
-          // 2. Persistenza Utente (Ricevuto direttamente da SQLAlchemy/Pydantic)
-          this.userSignal.set(response.user);
-          localStorage.setItem('musin_user', JSON.stringify(response.user));
-        }),
-        catchError((error) => {
-          console.error('Login Error:', error);
-          let msg = 'Errore di connessione al server.';
-          if (error.status === 422) msg = 'Formato dati non valido (422).';
-          if (error.status === 401) msg = 'Credenziali errate.';
-          return throwError(() => new Error(msg));
-        }),
-      );
+  registrationEnabled(): Observable<boolean> {
+    return this.http
+      .get<{ registration_enabled: boolean }>(`${this.API_URL}/config`)
+      .pipe(map((config) => config.registration_enabled));
+  }
+
+  changePassword(currentPassword: string, newPassword: string): Observable<void> {
+    return this.http.post<void>(`${this.API_URL}/change-password`, {
+      current_password: currentPassword,
+      new_password: newPassword,
+    });
   }
 
   logout(): void {
-    localStorage.removeItem('musin_token');
-    localStorage.removeItem('musin_user');
-    this.tokenSignal.set(null);
-    this.userSignal.set(null);
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    this.token.set(null);
+    this.user.set(null);
   }
 
   getToken(): string | null {
-    return this.tokenSignal();
+    return this.token();
+  }
+
+  private storeSession(response: AuthResponse): void {
+    localStorage.setItem(TOKEN_KEY, response.access_token);
+    localStorage.setItem(USER_KEY, JSON.stringify(response.user));
+    this.token.set(response.access_token);
+    this.user.set(response.user);
+  }
+
+  private readStoredUser(): User | null {
+    try {
+      return JSON.parse(localStorage.getItem(USER_KEY) ?? 'null');
+    } catch {
+      return null;
+    }
   }
 }

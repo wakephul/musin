@@ -1,29 +1,21 @@
-import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
+import { HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { Router } from '@angular/router';
-import { catchError } from 'rxjs/operators';
 import { throwError } from 'rxjs';
+import { catchError } from 'rxjs/operators';
+
 import { AuthService } from '../services/auth.service';
 
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const authService = inject(AuthService);
   const router = inject(Router);
   const token = authService.getToken();
+  const request = token ? req.clone({ setHeaders: { Authorization: `Bearer ${token}` } }) : req;
 
-  let authReq = req;
-
-  if (token) {
-    authReq = req.clone({
-      setHeaders: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  }
-
-  return next(authReq).pipe(
+  return next(request).pipe(
     catchError((error: HttpErrorResponse) => {
-      // Se il backend risponde con 401 Unauthorized
-      if (error.status === 401) {
+      // Sessione scaduta: si torna al login. Un 401 sul login stesso è solo "credenziali errate".
+      if (error.status === 401 && authService.isAuthenticated()) {
         authService.logout();
         router.navigate(['/login']);
       }
