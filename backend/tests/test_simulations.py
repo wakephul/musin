@@ -41,6 +41,9 @@ def test_launch_creates_a_pending_simulation_and_queues_it(client, auth, network
     {"protocol": {"num_trials": "many"}},
     {"builtin": "does_not_exist"},
     {"phases": "soon"},
+    '{"phases": {"test_duration_ms": NaN}}',               # NaN non è JSON
+    '{"phases": {"test_duration_ms": Infinity}}',
+    {"phases": {"train_duration_ms": -100, "test_duration_ms": 200}},
 ])
 def test_launch_rejects_invalid_params(client, auth, network, queued_tasks, params):
     assert launch(client, auth, network, params).status_code == 422
@@ -142,3 +145,13 @@ def test_stimuli_uploaded_before_the_library_cannot_be_replayed(client, auth, ne
     response = launch(client, auth, network, params)
     assert response.status_code == 422
     assert "caricalo di nuovo" in response.json()["detail"]
+
+
+def test_a_simulation_keeps_the_network_it_was_launched_with(client, auth, network):
+    """Modificare la rete dopo il lancio non cambia ciò che la simulazione calcola."""
+    simulation_id = launch(client, auth, network).json()["simulation_id"]
+    edited = {"name": "Rete modificata", "topology": {"populations": [{"id": "X", "size": 1, "neuron_model": "iaf_cond_exp"}], "projections": []}}
+    assert client.put(f"/api/v1/networks/{network['id']}", json=edited, headers=auth).status_code == 200
+    with SessionLocal() as db:
+        snapshot = db.get(Simulation, simulation_id).network_definition
+    assert [pop["id"] for pop in snapshot["topology"]["populations"]] == ["GR", "PC_A"]

@@ -76,6 +76,9 @@ class Simulation(Base):
     
     duration_ms: Mapped[float] = mapped_column(Float, default=1000.0, nullable=False)
     experiment_params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # Definizione della rete al momento del lancio: modificare la rete dopo non cambia
+    # ciò che una simulazione in coda calcola, né ciò che una conclusa ha calcolato.
+    network_definition: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
 
     status: Mapped[SimulationStatus] = mapped_column(Enum(SimulationStatus), default=SimulationStatus.PENDING, nullable=False)
     celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True, nullable=True)

@@ -51,7 +51,7 @@ def read(simulation_id):
 
 
 def test_completed_simulation_stores_the_results_path(monkeypatch, files, simulation_id):
-    def writes_results(task, sim_info, exp_params, storage, progress):
+    def writes_results(sim_info, exp_params, storage, progress):
         progress(50, "metà")
         store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
         store.put_json("spikes.json", {"spikes": {}})
@@ -65,7 +65,7 @@ def test_completed_simulation_stores_the_results_path(monkeypatch, files, simula
 
 
 def test_failure_is_recorded_with_its_reason_and_partial_results_are_removed(monkeypatch, files, simulation_id):
-    def fails(task, sim_info, exp_params, storage, progress):
+    def fails(sim_info, exp_params, storage, progress):
         storage.write(f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}/partial.png", b"x")
         raise ValueError("popolazione inesistente: XYZ")
 
@@ -80,7 +80,7 @@ def test_failure_is_recorded_with_its_reason_and_partial_results_are_removed(mon
 def test_abort_during_the_run_stops_at_the_next_progress_update(monkeypatch, files, simulation_id):
     steps = []
 
-    def aborted_midway(task, sim_info, exp_params, storage, progress):
+    def aborted_midway(sim_info, exp_params, storage, progress):
         progress(10, "primo passo")
         steps.append("first")
         with SessionLocal() as db:
@@ -96,7 +96,7 @@ def test_abort_during_the_run_stops_at_the_next_progress_update(monkeypatch, fil
 
 
 def test_a_simulation_aborted_while_queued_never_runs(monkeypatch, files, simulation_id):
-    def must_not_run(task, sim_info, exp_params, storage, progress):
+    def must_not_run(sim_info, exp_params, storage, progress):
         raise AssertionError("l'esperimento non doveva partire")
 
     use_experiment(monkeypatch, must_not_run)
@@ -105,3 +105,50 @@ def test_a_simulation_aborted_while_queued_never_runs(monkeypatch, files, simula
         db.commit()
     assert tasks.run_simulation_task.run(simulation_id) == {"status": "ABORTED"}
     assert tasks.run_simulation_task.run(999_999) == {"status": "ABORTED"}   # simulazione eliminata
+
+
+def test_a_redelivered_task_does_not_rerun_a_closed_simulation(monkeypatch, files, simulation_id):
+    def must_not_run(sim_info, exp_params, storage, progress):
+        raise AssertionError("l'esperimento non doveva partire")
+
+    use_experiment(monkeypatch, must_not_run)
+    for status in (SimulationStatus.COMPLETED, SimulationStatus.FAILED, SimulationStatus.RUNNING):
+        with SessionLocal() as db:
+            db.get(Simulation, simulation_id).status = status
+            db.commit()
+        assert tasks.run_simulation_task.run(simulation_id) == {"status": status.value}
+
+
+def test_simulations_left_running_by_a_restart_are_closed_as_failed(files, simulation_id):
+    with SessionLocal() as db:
+        simulation = db.get(Simulation, simulation_id)
+        simulation.status = SimulationStatus.RUNNING
+        db.commit()
+        partial = f"results/{simulation.owner_id}/sim_{simulation_id}/partial.png"
+    files.write(partial, b"x")
+    tasks.fail_interrupted_simulations()
+    status, _, error = read(simulation_id)
+    assert status == SimulationStatus.FAILED and "riavviato" in error
+    assert files.list("results") == []
+
+
+def test_the_experiment_receives_the_network_saved_at_launch(monkeypatch, files, simulation_id):
+    seen = {}
+
+    def records_network(sim_info, exp_params, storage, progress):
+        seen.update(sim_info["network_definition"])
+
+    use_experiment(monkeypatch, records_network)
+    with SessionLocal() as db:
+        db.get(Simulation, simulation_id).network_definition = {"topology": {"populations": [{"id": "AL_LANCIO"}], "projections": []}}
+        db.commit()
+    tasks.run_simulation_task.run(simulation_id)
+    assert seen["topology"]["populations"][0]["id"] == "AL_LANCIO"
+
+
+def test_result_names_cannot_leave_the_simulation_folder(files):
+    store = ResultStore(files, "results/1/sim_1")
+    for name in ("../../2/sim_5/GR_raster.png", "a/b.png", ".nascosto", "..\\x.png"):
+        with pytest.raises(ValueError):
+            store.put(name, b"x")
+    assert files.list("results") == []

@@ -3,6 +3,7 @@ import logging
 import time
 
 from celery import Task
+from celery.signals import worker_ready
 from sqlalchemy import select
 
 from backend.core.db import SessionLocal
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 ABORT_CHECK_INTERVAL_S = 2.0
 
-# Ogni esperimento espone run(task, sim_info, exp_params, storage, progress_cb).
+# Ogni esperimento espone run(sim_info, exp_params, storage, progress_cb).
 EXPERIMENTS = {
     "decision_making": ("worker.networks.decision_making", "run_decision_making_experiment"),
     "cerebellum_conditioning": ("worker.networks.cerebellum_conditioning", "run_cerebellum_conditioning"),
@@ -37,16 +38,32 @@ def _is_aborted(simulation_id: int) -> bool:
     return status is None or status == SimulationStatus.ABORTED
 
 
+@worker_ready.connect
+def fail_interrupted_simulations(**_kwargs) -> None:
+    """Il worker esegue una simulazione alla volta: se all'avvio ne trova una RUNNING,
+    è rimasta a metà per un riavvio o un crash e nessuno la sta più calcolando."""
+    with SessionLocal() as db:
+        interrupted = db.query(Simulation).filter(Simulation.status == SimulationStatus.RUNNING).all()
+        for simulation in interrupted:
+            simulation.status = SimulationStatus.FAILED
+            simulation.error_message = "Il simulatore è stato riavviato mentre la simulazione era in corso."
+            storage.delete_tree(f"results/{simulation.owner_id}/sim_{simulation.id}")
+            logger.warning("Simulazione %s chiusa come fallita: era in corso al riavvio.", simulation.id)
+        db.commit()
+
+
 @celery_app.task(bind=True, name="worker.tasks.run_simulation_task")
 def run_simulation_task(self: Task, simulation_id: int) -> dict:
     with SessionLocal() as db:
         simulation = db.get(Simulation, simulation_id)
-        if not simulation or simulation.status == SimulationStatus.ABORTED:
-            return {"status": "ABORTED"}
+        # Si esegue solo ciò che è in coda. Un task riconsegnato da Celery dopo la morte
+        # del worker trova la simulazione già chiusa (vedi fail_interrupted_simulations).
+        if not simulation or simulation.status != SimulationStatus.PENDING:
+            return {"status": simulation.status.value if simulation else "ABORTED"}
 
         owner_id = simulation.owner_id
         exp_params = simulation.experiment_params or {}
-        network_definition = db.get(Network, simulation.network_id).definition
+        network_definition = simulation.network_definition or db.get(Network, simulation.network_id).definition
         base_path = f"results/{owner_id}/sim_{simulation_id}"
 
         simulation.status = SimulationStatus.RUNNING
@@ -81,7 +98,7 @@ def run_simulation_task(self: Task, simulation_id: int) -> dict:
         try:
             module_name, function_name = EXPERIMENTS[experiment_kind(exp_params)]
             run_experiment = getattr(importlib.import_module(module_name), function_name)
-            run_experiment(self, sim_info, exp_params, storage, progress)
+            run_experiment(sim_info, exp_params, storage, progress)
             if _is_aborted(simulation_id):
                 raise SimulationAborted()
         except SimulationAborted:

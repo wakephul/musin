@@ -112,9 +112,13 @@ def launch_simulation(
     if not network:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rete non trovata")
 
+    def reject_constant(name: str):
+        raise ValueError(f"valore non ammesso: {name}")
+
     try:
-        parsed_params = json.loads(params)
-    except json.JSONDecodeError as exc:
+        # NaN e Infinity non sono JSON e MySQL non li salva: si rifiutano qui.
+        parsed_params = json.loads(params, parse_constant=reject_constant)
+    except ValueError as exc:
         raise HTTPException(422, f"I parametri non sono JSON valido: {exc}") from exc
     if not isinstance(parsed_params, dict):
         raise HTTPException(422, "I parametri devono essere un oggetto JSON")
@@ -138,6 +142,7 @@ def launch_simulation(
         network_id=network.id,
         duration_ms=total_duration_ms,
         experiment_params=parsed_params,
+        network_definition=network.definition,
         owner_id=current_user.id,
         status=SimulationStatus.PENDING,
     )
@@ -220,7 +225,8 @@ def get_simulation_results(db: SessionDep, current_user: CurrentUser, simulation
 
     # Raster e PSTH: si mostra ciò che il worker ha effettivamente prodotto, nell'ordine
     # delle popolazioni della rete (gli esperimenti built-in possono usare altri nomi).
-    network_order = [p["id"] for p in simulation.network.definition.get("topology", {}).get("populations", [])]
+    definition = simulation.network_definition or simulation.network.definition
+    network_order = [p["id"] for p in (definition.get("topology") or {}).get("populations") or []]
     recorded = sorted(
         # exp_*_raster.png è un grafico d'esperimento dei risultati più vecchi, non una popolazione.
         (name[:-len("_raster.png")] for name in files if name.endswith("_raster.png") and not name.startswith("exp_")),
