@@ -143,6 +143,28 @@ every progress update and stops within a few seconds.
 Simulations are reproducible: the `seed` parameter drives both NEST and the stimulus
 generation.
 
+## API
+
+Base path `/api/v1`, reachable through the web app (`http://localhost:3000/api/v1`)
+or directly on `http://localhost:8010` from the same machine. Interactive docs:
+`http://localhost:8010/docs`. Every route except login, register and config needs
+`Authorization: Bearer <token>`.
+
+| Prefix         | Routes                                                                                             |
+| -------------- | -------------------------------------------------------------------------------------------------- |
+| `/auth`        | `POST /login` (form), `POST /register`, `GET /me`, `POST /change-password`, `GET /config`           |
+| `/networks`    | `GET`, `POST`, `GET/PUT/DELETE /{id}`, `POST /{id}/fork`, `GET /models` (NEST model catalogue)      |
+| `/simulations` | `GET` (paginated), `POST /launch`, `GET /{id}`, `GET /{id}/status`, `POST /{id}/abort`, `GET /{id}/results`, `DELETE /{id}` |
+| `/stimuli`     | `GET`, `POST /upload`, `GET /{id}`, `DELETE /{id}`                                                  |
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:3000/api/v1/auth/login \
+  -d "username=$EMAIL" -d "password=$PASSWORD" | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+curl -s -X POST http://localhost:3000/api/v1/simulations/launch \
+  -H "Authorization: Bearer $TOKEN" \
+  -F network_id=1 -F 'params={"builtin": "cerebellum_conditioning", "n_train": 20, "n_test": 20}'
+```
+
 ## Development
 
 Frontend with live reload, against the API of the running stack:
