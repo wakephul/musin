@@ -58,11 +58,23 @@ def _parse_csv(raw: bytes) -> list[list[float]]:
 def _parse_hdf5(raw: bytes) -> list[list[float]]:
     import h5py
 
+    def read(handle, name: str) -> list:
+        # Un file HDF5 può far puntare un dataset a file esterni del server (link esterni,
+        # storage esterno, dataset virtuali): si accettano solo dati numerici contenuti nel file.
+        link = handle.get(name, getlink=True)
+        dataset = handle.get(name) if isinstance(link, h5py.HardLink) else None
+        if (
+            not isinstance(dataset, h5py.Dataset)
+            or dataset.external
+            or dataset.is_virtual
+            or dataset.dtype.kind not in "iuf"
+        ):
+            raise StimulusFormatError(f"Il file HDF5 deve contenere un dataset numerico '{name}' interno al file")
+        return dataset[()].ravel().tolist()
+
     try:
         with h5py.File(io.BytesIO(raw), "r") as handle:
-            if "senders" not in handle or "times" not in handle:
-                raise StimulusFormatError("Il file HDF5 deve contenere i dataset 'senders' e 'times'")
-            return _trains_from_events(handle["senders"][()].tolist(), handle["times"][()].tolist())
+            return _trains_from_events(read(handle, "senders"), read(handle, "times"))
     except OSError as exc:
         raise StimulusFormatError(f"HDF5 non leggibile: {exc}") from exc
 
