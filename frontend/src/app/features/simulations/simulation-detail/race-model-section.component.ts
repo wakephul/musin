@@ -54,11 +54,7 @@ function percentileTable(stats: RaceModelStats | null | undefined) {
               } @else {
                 <p>
                   Violazione della disuguaglianza: <strong>{{ stats.has_facilitation ? 'sì' : 'no' }}</strong>
-                  (massimo <span class="num">{{ stats.max_rmi_violation | itNum: 2 }}</span
-                  >@if (stats.p_value !== undefined) {
-                    <span class="num">, {{ pText(stats.p_value) }}</span>
-                  }
-                  )
+                  <span class="num"> ({{ detail(stats) }})</span>
                 </p>
               }
               @if (stats.note) {
@@ -151,8 +147,12 @@ function percentileTable(stats: RaceModelStats | null | undefined) {
   `,
 })
 export class RaceModelSectionComponent {
-  protected pText(p: number): string {
-    return p < 0.001 ? 'p < 0,001' : `p = ${p.toFixed(3).replace('.', ',')}`;
+  /** "massimo 0,87, p < 0,001": il valore p c'è solo nei risultati calcolati con il test. */
+  protected detail(stats: RaceModelStats): string {
+    const comma = (value: number, digits: number) => value.toFixed(digits).replace('.', ',');
+    const maximum = `massimo ${comma(stats.max_rmi_violation, 2)}`;
+    if (stats.p_value == null) return maximum;
+    return `${maximum}, ${stats.p_value < 0.001 ? 'p < 0,001' : `p = ${comma(stats.p_value, 3)}`}`;
   }
 
   /** Il limite usato è cambiato nel tempo: i risultati salvati dicono con quale sono stati calcolati. */
