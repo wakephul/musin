@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from worker.networks.cerebellum_msi_race import adapt_legacy_topology, make_windows
 from worker.networks.generic import Trial, build_trials, decision_metrics, race_model, stimulus_spike_trains
@@ -122,3 +123,26 @@ def test_networks_of_one_simulation_and_of_the_next_do_not_share_a_seed():
     assert len(set(second)) == len(second) and not set(second) & set(range(1, 400))
     assert all(1 <= seed < 2**31 for seed in second)
     assert _network_seed(21, 1) == _network_seed(21, 1)
+
+
+def test_the_noise_level_of_the_decision_network_depends_on_the_seed_only(monkeypatch):
+    """Variando un parametro dello stimolo a parità di seed il rumore di fondo deve restare lo stesso,
+    altrimenti l'effetto del parametro si confonde con quello del rumore."""
+    from worker.networks import decision_making as dm
+
+    drawn = []
+    monkeypatch.setattr(dm, "_build_network", lambda nest, par, a, b, rng: drawn.append(rng.normal(0, 1, 3).tolist()) or {})
+    monkeypatch.setattr(dm.nest_utils, "init_kernel", lambda *args: None)
+
+    class Stop(Exception):
+        pass
+
+    def stop(*args):
+        raise Stop
+
+    cfg = {**dm.DEFAULT_EXPERIMENT, "num_trials": 4}
+    for latency, seed in ((150.0, 3), (180.0, 3), (150.0, 4)):
+        with pytest.raises(Stop):
+            dm._run_network(type("Nest", (), {"Simulate": stop})(), "auditory", {**cfg, "auditory_latency_ms": latency},
+                            dm.DEFAULT_NETWORK_PARAMS | {"order": 10}, ["pop_A", "pop_B"] * 2, seed, None, "", lambda *a: None)
+    assert drawn[0] == drawn[1] != drawn[2]

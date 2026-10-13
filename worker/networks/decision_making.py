@@ -268,7 +268,9 @@ def _run_network(nest, name, cfg, par, sides, seed, store, prefix, progress):
     trains = {side: [sorted(set(train)) for train in side_trains] for side, side_trains in trains.items()}
 
     nest_utils.init_kernel(nest, resolution, seed)
-    recorders = _build_network(nest, par, trains["pop_A"], trains["pop_B"], rng)
+    # Il livello di rumore ha un generatore suo: con quello degli stimoli dipenderebbe da quanti
+    # numeri hanno consumato i treni, e cambiando latenza o frequenza cambierebbe anche il rumore.
+    recorders = _build_network(nest, par, trains["pop_A"], trains["pop_B"], np.random.default_rng([seed, 1]))
     simulated = 0.0
     while simulated < total_ms:
         chunk = min(SIMULATION_CHUNK_MS, total_ms - simulated)
