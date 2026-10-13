@@ -46,6 +46,7 @@ N_STIM_NEURONS  = 80       # parrot neurons per stimulus channel (execution_type
 BIN_MS          = 5.0      # rate-bin size
 MA_WINDOW       = 10       # moving-average window (bins)
 RT_THRESHOLD    = 15.0     # Hz, |rate_A − rate_B| threshold for response-time detection
+COND_NAMES      = {'auditory': 'uditivo', 'visual': 'visivo', 'audiovisual': 'audiovisivo'}
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -510,26 +511,26 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
     # 1. DCN + PC rates — full timeline
     fig, axes = plt.subplots(2, 1, figsize=(18, 8), sharex=True)
     ts = t_bins_a / 1000.0
-    l1, = axes[0].plot(ts, ma_a, color='#264653', lw=1.2, label='DCN_A (side A)')
-    l2, = axes[0].plot(ts, ma_b, color='#e76f51', lw=1.2, label='DCN_B (side B)', alpha=0.85)
-    vline = axes[0].axvline(train_time / 1000.0, color='black', ls='--', lw=1, alpha=0.6, label='Train → Test')
+    l1, = axes[0].plot(ts, ma_a, color='#264653', lw=1.2, label='DCN_A (lato A)')
+    l2, = axes[0].plot(ts, ma_b, color='#e76f51', lw=1.2, label='DCN_B (lato B)', alpha=0.85)
+    vline = axes[0].axvline(train_time / 1000.0, color='black', ls='--', lw=1, alpha=0.6, label='Inizio test')
     # Conditions are interleaved during test: shade each test-trial stimulus window by condition
     for k, (cond, _side) in enumerate(test_specs):
         x0 = (n_train + k) * TRIAL_MS / 1000.0
         axes[0].axvspan(x0, x0 + STIM_MS / 1000.0, alpha=0.15, color=colors[cond])
-    cond_patches = [mpatches.Patch(color=colors[c], alpha=0.4, label=f'Test: {c}') for c in colors]
-    axes[0].set_ylabel('DCN Rate (Hz)')
-    axes[0].set_title('Cerebellar Conditioning — DCN Population Activity (test conditions interleaved)')
+    cond_patches = [mpatches.Patch(color=colors[c], alpha=0.4, label=f'Test: {COND_NAMES[c]}') for c in colors]
+    axes[0].set_ylabel('DCN (Hz per neurone)')
+    axes[0].set_title('Attività dei DCN (sfondo: condizione dei trial di test)')
     axes[0].legend(handles=[l1, l2, vline] + cond_patches, fontsize=7, ncol=3)
 
-    axes[1].plot(t_bins_pc / 1000.0, ma_pc, color='#2a9d8f', lw=1.0, label='PC (Purkinje)')
+    axes[1].plot(t_bins_pc / 1000.0, ma_pc, color='#2a9d8f', lw=1.0, label='PC')
     axes[1].axvline(train_time / 1000.0, color='black', ls='--', lw=1, alpha=0.6)
-    axes[1].set_xlabel('Time (s)')
-    axes[1].set_ylabel('PC Rate (Hz)')
-    axes[1].set_title('Purkinje Cell Population Activity')
+    axes[1].set_xlabel('Tempo (s)')
+    axes[1].set_ylabel('PC (Hz per neurone)')
+    axes[1].set_title('Attività delle cellule di Purkinje')
     axes[1].legend(fontsize=7)
     fig.tight_layout()
-    _upload(fig, 'exp_cond_activation.png')
+    _upload(fig, 'exp_attivita_DCN_e_PC.png')
 
     # 2. Response-time CDF (test phase)
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -538,65 +539,64 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
         if valid:
             cnt, bins = np.histogram(valid, bins=10)
             cdf = np.cumsum(cnt / max(cnt.sum(), 1))
-            ax.plot(bins[1:], cdf, '--o', label=lbl, color=colors.get(lbl, 'gray'), lw=1.5)
+            ax.plot(bins[1:], cdf, '--o', label=COND_NAMES[lbl], color=colors.get(lbl, 'gray'), lw=1.5)
     ax.set_xlim(0, 1000)
     ax.set_ylim(0, 1.1)
-    ax.set_xlabel('Response Time (ms)')
-    ax.set_ylabel('CDF')
-    ax.set_title('Response-Time CDF — Test Phase (by Condition)')
+    ax.set_xlabel('Tempo di risposta (ms)')
+    ax.set_ylabel('Frazione cumulativa delle risposte')
+    ax.set_title('Tempi di risposta nel test, per condizione')
     ax.legend()
     fig.tight_layout()
-    _upload(fig, 'exp_cond_cdf.png')
+    _upload(fig, 'exp_tempi_di_risposta.png')
 
     # 3. DCN raster — test phase
     fig, axes = plt.subplots(2, 1, figsize=(16, 6), sharex=True)
     mask_a = t_a >= train_time
     mask_b = t_b >= train_time
     axes[0].scatter((t_a[mask_a]) / 1000.0, snd_a[mask_a], s=0.4, color='#264653', alpha=0.5)
-    axes[0].set_ylabel('DCN_A neuron id')
-    axes[0].set_title('DCN_A Raster — Test Phase')
+    axes[0].set_ylabel('ID neurone DCN_A')
+    axes[0].set_title('Raster DCN_A nel test')
     axes[1].scatter((t_b[mask_b]) / 1000.0, snd_b[mask_b], s=0.4, color='#e76f51', alpha=0.5)
-    axes[1].set_ylabel('DCN_B neuron id')
-    axes[1].set_title('DCN_B Raster — Test Phase')
-    axes[1].set_xlabel('Time (s)')
+    axes[1].set_ylabel('ID neurone DCN_B')
+    axes[1].set_title('Raster DCN_B nel test')
+    axes[1].set_xlabel('Tempo (s)')
     # Shade each interleaved test-trial stimulus window by its condition
     for k, (cond, _side) in enumerate(test_specs):
         x0 = (n_train + k) * TRIAL_MS / 1000.0
         for ax_ in axes:
             ax_.axvspan(x0, x0 + STIM_MS / 1000.0, alpha=0.12, color=colors[cond])
     fig.tight_layout()
-    _upload(fig, 'exp_cond_dcn_test.png')
+    _upload(fig, 'exp_raster_DCN_nel_test.png')
 
     # 4. Trial outcomes by condition
     fig, ax = plt.subplots(figsize=(6, 4))
     lbls = list(outcomes.keys())
     bottom = np.zeros(len(lbls))
-    for key, label, color in (('correct', 'Correct side', '#2a9d8f'),
-                              ('wrong_side', 'Wrong side', '#e76f51'),
-                              ('no_response', 'No response', '#cbd5e1')):
+    for key, label, color in (('correct', 'Lato corretto', '#2a9d8f'),
+                              ('wrong_side', 'Lato sbagliato', '#e76f51'),
+                              ('no_response', 'Nessuna risposta', '#cbd5e1')):
         vals = np.array([100.0 * outcomes[l][key] / max(outcomes[l]['trials'], 1) for l in lbls])
-        ax.bar(lbls, vals, bottom=bottom, color=color, width=0.5, label=label)
+        ax.bar([COND_NAMES[l] for l in lbls], vals, bottom=bottom, color=color, width=0.5, label=label)
         bottom += vals
     ax.axhline(50, color='black', ls='--', lw=1, alpha=0.5)
     ax.set_ylim(0, 100)
-    ax.set_ylabel('Test trials (%)')
-    ax.set_title('Lateralisation outcome by condition')
+    ax.set_ylabel('Trial di test (%)')
+    ax.set_title('Esito della lateralizzazione per condizione')
     ax.legend(fontsize=8, loc='lower right')
     fig.tight_layout()
-    _upload(fig, 'exp_cond_accuracy.png')
+    _upload(fig, 'exp_esiti_per_condizione.png')
 
     # 5. PF-PC weight distribution before and after training
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.hist(final_weights, bins=50, color='#264653', alpha=0.8, edgecolor='white')
-    ax.axvline(par['Init_PFPC'], color='red', ls='--', lw=1.5, label=f'Init weight ({par["Init_PFPC"]})')
-    ax.set_xlabel('PF-PC Synapse Weight')
-    ax.set_ylabel('Count')
-    ax.set_title(f'PF-PC Weight Distribution After Training '
-                 f'(mean={weight_stats["mean"]:.2f}, '
-                 f'{100*weight_stats["frac_depressed"]:.0f}% depressed)')
+    ax.axvline(par['Init_PFPC'], color='red', ls='--', lw=1.5, label=f'Peso iniziale ({par["Init_PFPC"]})')
+    ax.set_xlabel('Peso della sinapsi GR→PC')
+    ax.set_ylabel('Sinapsi')
+    ax.set_title(f'Pesi GR→PC dopo l\'addestramento (media {weight_stats["mean"]:.2f}, '
+                 f'{100*weight_stats["frac_depressed"]:.0f}% depresse)')
     ax.legend()
     fig.tight_layout()
-    _upload(fig, 'exp_cond_weights.png')
+    _upload(fig, 'exp_pesi_GR_PC.png')
 
     # 6. Per-trial timeline: winner annotation on activation
     fig, ax = plt.subplots(figsize=(18, 5))
@@ -607,12 +607,12 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
         t0_s = r['trial'] * TRIAL_MS / 1000.0
         clr  = '#2a9d8f' if r['correct'] else '#e9c46a'
         ax.axvspan(t0_s, t0_s + STIM_MS / 1000.0, alpha=0.18, color=clr)
-    ax.set_xlabel('Time (s)')
-    ax.set_ylabel('Rate (Hz)')
-    ax.set_title('DCN Activation — test trials (green=correct, yellow=error)')
+    ax.set_xlabel('Tempo (s)')
+    ax.set_ylabel('Hz per neurone')
+    ax.set_title('Attività dei DCN nel test (verde: trial corretto, giallo: errore)')
     ax.legend(fontsize=8)
     fig.tight_layout()
-    _upload(fig, 'exp_cond_timeline.png')
+    _upload(fig, 'exp_esito_dei_trial.png')
 
     # ── Per-population raster + PSTH ──────────────────────────────
     # These match the population ids in the network definition (GR, PC, IO,
@@ -636,10 +636,10 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
         else:
             tp, sp = tms, snd
         ax.scatter(tp / 1000.0, sp, s=0.3, color='#264653', alpha=0.4)
-        ax.axvline(train_time / 1000.0, color='red', ls='--', lw=1, alpha=0.6, label='Train → Test')
-        ax.set_xlabel('Time (s)')
-        ax.set_ylabel(f'{pop_id} neuron id')
-        ax.set_title(f'{pop_id} — Raster Plot (n={n_neu})')
+        ax.axvline(train_time / 1000.0, color='red', ls='--', lw=1, alpha=0.6, label='Inizio test')
+        ax.set_xlabel('Tempo (s)')
+        ax.set_ylabel(f'ID neurone {pop_id}')
+        ax.set_title(f'Raster: {pop_id} (n={n_neu})')
         ax.legend(fontsize=7)
         fig.tight_layout()
         _upload(fig, f'{pop_id}_raster.png')
@@ -649,9 +649,9 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, minio_service, pr
         fig, ax = plt.subplots(figsize=(16, 4))
         ax.plot(tb / 1000.0, rt, color='#2a9d8f', lw=0.8)
         ax.axvline(train_time / 1000.0, color='red', ls='--', lw=1, alpha=0.6)
-        ax.set_xlabel('Time (s)')
-        ax.set_ylabel('Rate (Hz)')
-        ax.set_title(f'{pop_id} — Population Firing Rate (PSTH)')
+        ax.set_xlabel('Tempo (s)')
+        ax.set_ylabel('Hz per neurone')
+        ax.set_title(f'Frequenza media: {pop_id}')
         fig.tight_layout()
         _upload(fig, f'{pop_id}_histogram.png')
 
