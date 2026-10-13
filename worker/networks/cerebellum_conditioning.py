@@ -9,7 +9,7 @@ latency (auditory 150 ms, visual 220 ms) and stops at 600 ms, as in the legacy
 execution_types.json; responses are read over the first 1000 ms.
 IO teaching signal: 8.5 Hz Poisson, 300–600 ms into each training trial.
 
-Config source: data/config/network_config.json + cerebellum_simple.py (musin-backend-1.0.0)
+Parameters come from the original NEST 2.18 model (`cerebellum_simple.py` of musin-backend 1.0.0).
 
 Neuron models: GR, PC and DCN are iaf_cond_exp with the legacy parameters, IO is a
 parrot relay (same as cerebellum_simple.py). The CerebNEST eglif_dcnp model cannot be
@@ -30,52 +30,30 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-from worker.analysis import cf_gated_ltd
+from backend.services.experiments import CONDITIONING_DEFAULTS
+from worker import nest_utils
+from worker.analysis import (
+    PAPER_PERCENTILES, binned_rate, cf_gated_ltd, first_crossing, median_or_none, paired_race, percentiles,
+    race_model_inequality, trailing_mean,
+)
+from worker.networks.generic import plot_percentile_cdf, plot_race_model
 from worker.results import ResultStore
 
-# ── Fixed protocol constants (from network_config.json) ─────────────────────
+# ── Fixed protocol constants (values of the original NEST 2.18 model) ───────
 TRIAL_MS        = 3000.0   # total trial window
-STIM_MS         = 1000.0   # response window within trial
-STIM_STOP_MS    = 600.0    # sensory drive offset within trial (execution_types.json)
-LATENCY_MS      = {'aud': 150.0, 'vis': 220.0}   # first-spike latency per modality
+STIM_MS         = 1000.0   # response window within trial: decision and response time are read here
+STIM_STOP_MS    = 600.0    # sensory drive offset within trial
+LATENCY_MS      = {'aud': 150.0, 'vis': 220.0}   # first-spike latency per modality (overridable)
 IO_START_MS     = 300.0    # IO teaching onset within trial
 IO_STOP_MS      = 600.0    # IO teaching offset within trial
 IO_RATE         = 8.5      # Hz, IO Poisson rate
-STIM_RATE       = 30.0     # Hz, sensory Poisson rate (execution_types.json)
-N_STIM_NEURONS  = 80       # parrot neurons per stimulus channel (execution_types.json)
+STIM_RATE       = 30.0     # Hz, sensory Poisson rate
+N_STIM_NEURONS  = 80       # parrot neurons per stimulus channel
 BIN_MS          = 5.0      # rate-bin size
-MA_WINDOW       = 10       # moving-average window (bins)
+MA_WINDOW       = 10       # moving-average window (bins) of the plotted rates
+RT_SMOOTH_BINS  = 5        # window (bins) used to read the response time, as in the original analysis
 RT_THRESHOLD    = 15.0     # Hz, |rate_A − rate_B| threshold for response-time detection
 COND_NAMES      = {'auditory': 'uditivo', 'visual': 'visivo', 'audiovisual': 'audiovisivo'}
-
-
-# ── Helpers ─────────────────────────────────────────────────────────────────
-
-def _bin_rates(times, n_neurons, t_start, t_end, bin_ms=BIN_MS):
-    bins  = np.arange(t_start, t_end + bin_ms, bin_ms)
-    t_arr = np.asarray(times)
-    mask  = (t_arr >= t_start) & (t_arr < t_end)
-    counts, _ = np.histogram(t_arr[mask], bins=bins)
-    rates = counts * 1000.0 / (bin_ms * max(n_neurons, 1))
-    return bins[:-1], rates
-
-
-def _moving_average(arr, window=MA_WINDOW):
-    """Trailing mean: bin i averages bins i-window+1..i, so a threshold crossing
-    can never precede the spikes that cause it (a centred window would)."""
-    return np.convolve(arr, np.ones(window) / window, mode='full')[:len(arr)]
-
-
-def _response_time(ma_a, ma_b, t_bins, trial_start_ms, threshold=RT_THRESHOLD):
-    """First bin where |rate_A − rate_B| ≥ threshold within the trial window."""
-    diff = np.abs(np.asarray(ma_a) - np.asarray(ma_b))
-    mask = (t_bins >= trial_start_ms) & (t_bins < trial_start_ms + TRIAL_MS)
-    local_diff = diff[mask]
-    local_bins = t_bins[mask]
-    hits = np.where(local_diff >= threshold)[0]
-    if len(hits):
-        return float(local_bins[hits[0]] - trial_start_ms)
-    return float('nan')
 
 
 # ── Network builder ──────────────────────────────────────────────────────────
@@ -217,8 +195,6 @@ def _build_network(nest, par):
         pfpc_to_side_a=np.isin(np.asarray(pfpc_conns.get('target')), pc_ids[:pc_half]),
         io_a_ids=set(io_ids[:io_half]),
         io_b_ids=set(io_ids[io_half:]),
-        pc_a_ids=set(pc_ids[:pc_half]),
-        pc_b_ids=set(pc_ids[pc_half:]),
         PC_num=PC_num, DCN_num=DCN_num,
     )
 
@@ -267,11 +243,11 @@ def _apply_ltd_step(nest, net, trial_t0, par):
     nest.SetStatus(pfpc, 'weight', cf_gated_ltd(weights, depress, LTD_RATE, LTP_RATE, W_MIN, W_MAX).tolist())
 
 
-def _add_stim(nest, net, global_trial_idx, channel_keys):
+def _add_stim(nest, net, global_trial_idx, channel_keys, latencies):
     """Create one poisson_generator per active channel for this trial."""
     t0 = global_trial_idx * TRIAL_MS
     for ch_key in channel_keys:
-        latency = LATENCY_MS[ch_key.split('_')[1]]   # 'PA_aud' -> 'aud'
+        latency = latencies[ch_key.split('_')[1]]   # 'PA_aud' -> 'aud'
         pg = nest.Create('poisson_generator', params={
             'rate': STIM_RATE,
             'start': float(t0 + latency),
@@ -295,7 +271,7 @@ def _add_io(nest, net, global_trial_idx, side_a):
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 
-def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress_cb):
+def run_cerebellum_conditioning(sim_id_dict, exp_params, storage, progress_cb):
     """
     Full cerebellar conditioning: training + test.
     Called from worker/tasks.py when builtin == 'cerebellum_conditioning'.
@@ -314,8 +290,11 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress
         if k in exp_params:
             par[k] = exp_params[k]
 
-    n_train = int(exp_params.get('n_train', 20))
-    n_test  = int(exp_params.get('n_test',  20))
+    n_train = int(exp_params.get('n_train', CONDITIONING_DEFAULTS['n_train']))
+    n_test  = int(exp_params.get('n_test', CONDITIONING_DEFAULTS['n_test']))
+    latencies = {'aud': float(exp_params.get('aud_latency_ms', LATENCY_MS['aud'])),
+                 'vis': float(exp_params.get('vis_latency_ms', LATENCY_MS['vis']))}
+    rt_smooth_bins = int(exp_params.get('rt_smooth_bins', RT_SMOOTH_BINS))
 
     owner_id  = sim_id_dict['owner_id']
     sim_id    = sim_id_dict['sim_id']
@@ -354,12 +333,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress
 
     # ── NEST kernel ──────────────────────────────────────────────
     progress_cb(3, "Avvio del kernel NEST")
-    nest.ResetKernel()
-    nest.SetKernelStatus({
-        'resolution': 0.1,
-        'rng_seed':   int(par['seed']),
-        'local_num_threads': 6,
-    })
+    nest_utils.init_kernel(nest, 0.1, int(par['seed']))
 
     # ── Build network ────────────────────────────────────────────
     progress_cb(8, "Costruzione del microcircuito")
@@ -376,7 +350,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress
             ch_keys = ['PA_aud'] if side_a else ['PB_aud']
         else:
             ch_keys = ['PA_vis'] if side_a else ['PB_vis']
-        _add_stim(nest, net, t, ch_keys)
+        _add_stim(nest, net, t, ch_keys, latencies)
         _add_io(nest, net, t, side_a)
 
         nest.Simulate(TRIAL_MS)
@@ -398,7 +372,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress
             ch_keys = ['PA_vis'] if side_a else ['PB_vis']
         else:  # audiovisual
             ch_keys = ['PA_aud', 'PA_vis'] if side_a else ['PB_aud', 'PB_vis']
-        _add_stim(nest, net, g, ch_keys)
+        _add_stim(nest, net, g, ch_keys, latencies)
 
     # ── Simulate test phase in chunks ────────────────────────────
     progress_cb(54, "Test")
@@ -430,19 +404,14 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress
     DCN_b_n = len(net['DCN_b'])
     PC_n    = net['PC_num']
 
-    t_bins_a, rates_a = _bin_rates(t_a, DCN_a_n, 0, total_time)
-    t_bins_b, rates_b = _bin_rates(t_b, DCN_b_n, 0, total_time)
-    ma_a = _moving_average(rates_a)
-    ma_b = _moving_average(rates_b)
+    t_bins_a, rates_a = binned_rate(t_a, DCN_a_n, BIN_MS, total_time)
+    t_bins_b, rates_b = binned_rate(t_b, DCN_b_n, BIN_MS, total_time)
+    ma_a = trailing_mean(rates_a, rt_smooth_bins)
+    ma_b = trailing_mean(rates_b, rt_smooth_bins)
+    differential = np.abs(ma_a - ma_b)
 
-    t_bins_pc, rates_pc = _bin_rates(t_pc, PC_n, 0, total_time)
-    ma_pc = _moving_average(rates_pc)
-
-    # Baseline from last ITI of training
-    baseline_win = 1000.0
-    baseline_t0  = train_time - baseline_win
-    base_a_hz = len(t_a[(t_a >= baseline_t0) & (t_a < train_time)]) / baseline_win * 1000.0 / max(DCN_a_n, 1)
-    base_b_hz = len(t_b[(t_b >= baseline_t0) & (t_b < train_time)]) / baseline_win * 1000.0 / max(DCN_b_n, 1)
+    t_bins_pc, rates_pc = binned_rate(t_pc, PC_n, BIN_MS, total_time)
+    ma_pc = trailing_mean(rates_pc, MA_WINDOW)
 
     cond_labels   = ('auditory', 'visual', 'audiovisual')
     rt_by_cond    = {lbl: [] for lbl in cond_labels}
@@ -453,16 +422,16 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress
         t0      = g * TRIAL_MS
         t1_stim = t0 + STIM_MS
 
-        rt = _response_time(ma_a, ma_b, t_bins_a, t0)
+        # Response time: first moment |rate_A − rate_B| reaches the threshold, read in the
+        # same 1000 ms window as the decision (the original analysis dropped later crossings).
+        crossing = first_crossing(t_bins_a, differential, RT_THRESHOLD, t0, t1_stim)
+        rt = float('nan') if crossing is None else crossing - t0
         rt_by_cond[cond].append(rt)
 
+        # These neurons are silent without input, so the decision is a plain spike count.
         spk_a = int(np.sum((t_a >= t0) & (t_a < t1_stim)))
         spk_b = int(np.sum((t_b >= t0) & (t_b < t1_stim)))
-        expected_baseline_a = base_a_hz * STIM_MS / 1000.0 * DCN_a_n
-        expected_baseline_b = base_b_hz * STIM_MS / 1000.0 * DCN_b_n
-        delta_a  = spk_a - expected_baseline_a
-        delta_b  = spk_b - expected_baseline_b
-        winner   = 'DCN_A' if delta_a > delta_b else 'DCN_B' if delta_b > delta_a else 'none'
+        winner   = 'DCN_A' if spk_a > spk_b else 'DCN_B' if spk_b > spk_a else 'none'
         expected = 'DCN_A' if side_a else 'DCN_B'
 
         trial_results.append({
@@ -472,7 +441,6 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress
             'correct': winner == expected,
             'response_time_ms': None if np.isnan(rt) else rt,
             'spikes_DCN_A': spk_a, 'spikes_DCN_B': spk_b,
-            'delta_A': float(delta_a), 'delta_B': float(delta_b),
         })
 
     # A trial with no DCN spikes on either side is a miss ('none'): it counts
@@ -489,6 +457,39 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress
         accuracy[lbl] = round(100.0 * n_correct / max(len(cond_tr), 1), 1)
         valid_rts     = [r for r in rt_by_cond[lbl] if not np.isnan(r)]
         median_rt[lbl] = float(np.median(valid_rts)) if valid_rts else None
+
+    # ── Race model, as in Cavadini et al. (2025), Fig. 9 ──────────
+    # The i-th auditory trial is paired with the i-th visual trial and the faster of the
+    # two is what two independent channels would produce. Multisensory integration shows
+    # as audiovisual responses faster than that.
+    answered = {lbl: [None if np.isnan(r) else float(r) for r in rt_by_cond[lbl]] for lbl in cond_labels}
+    responses = {lbl: [r for r in answered[lbl] if r is not None] for lbl in cond_labels}
+    race = paired_race(answered['auditory'], answered['visual'])
+    rt_percentiles = {lbl: percentiles(responses[lbl]) for lbl in cond_labels}
+    rt_percentiles['race_model'] = percentiles(race)
+    faster_than_race = sum(av < rm for av, rm in zip(rt_percentiles['audiovisual'], rt_percentiles['race_model']))
+    race_result = {
+        'population': 'DCN',
+        'method': 'rate_threshold_crossing',
+        'n_V': len(responses['visual']), 'n_A': len(responses['auditory']), 'n_AV': len(responses['audiovisual']),
+        'trials': {'V': n_test, 'A': n_test, 'AV': n_test},
+        'median_rt_ms': {'V': median_or_none(responses['visual']), 'A': median_or_none(responses['auditory']),
+                         'AV': median_or_none(responses['audiovisual']), 'race': median_or_none(race)},
+        'percentile_levels': list(PAPER_PERCENTILES),
+        'percentiles_ms': {'V': rt_percentiles['visual'], 'A': rt_percentiles['auditory'],
+                           'AV': rt_percentiles['audiovisual'], 'race': rt_percentiles['race_model']},
+        'percentiles_av_faster_than_race': faster_than_race,
+        'max_rmi_violation': 0.0,
+        'p_value': None,
+        'has_facilitation': False,
+    }
+    rmi = None
+    if all(responses[lbl] for lbl in cond_labels):
+        rmi = race_model_inequality(responses['visual'], responses['auditory'], responses['audiovisual'],
+                                    n_test, n_test, n_test, step_ms=BIN_MS)
+        race_result['max_rmi_violation'] = round(rmi['max_violation'], 4)
+        race_result['p_value'] = rmi['p_value']
+        race_result['has_facilitation'] = rmi['significant']
 
     # ── Final PF–PC weight stats for diagnostics ─────────────────
     final_weights = np.asarray(nest.GetStatus(net['pfpc_conns'], 'weight'), dtype=float)
@@ -548,6 +549,20 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress
     ax.legend()
     fig.tight_layout()
     _upload(fig, 'exp_tempi_di_risposta.png')
+
+    plot_percentile_cdf(store, 'exp_percentili_come_nel_paper.png',
+                        'Tempi di risposta ai percentili 5-95 (rete cerebellare)', {
+                            'Uditivo': (responses['auditory'], '--s', '#1c1c1a', '#1c1c1a'),
+                            'Visivo': (responses['visual'], '--o', '#1c1c1a', '#1c1c1a'),
+                            'Audiovisivo': (responses['audiovisual'], '-D', '#0f6e6e', '#ffffff'),
+                            'Modello a gara': (race, '-o', '#9a9a92', '#ffffff'),
+                        })
+    if rmi is not None:
+        plot_race_model(store, 'rmi_DCN.png', rmi,
+                        {'V': responses['visual'], 'A': responses['auditory'], 'AV': responses['audiovisual']},
+                        {'V': n_test, 'A': n_test, 'AV': n_test},
+                        'Race Model Inequality: DCN', 'Tempo di risposta (ms)')
+    store.put_json('race_model.json', {'race_model': [race_result]})
 
     # 3. DCN raster — test phase
     fig, axes = plt.subplots(2, 1, figsize=(16, 6), sharex=True)
@@ -645,7 +660,7 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress
         _upload(fig, f'{pop_id}_raster.png')
 
         # PSTH (population mean firing rate)
-        tb, rt = _bin_rates(tms, n_neu, 0, total_time, bin_ms=50.0)
+        tb, rt = binned_rate(tms, n_neu, 50.0, total_time)
         fig, ax = plt.subplots(figsize=(16, 4))
         ax.plot(tb / 1000.0, rt, color='#2a9d8f', lw=0.8)
         ax.axvline(train_time / 1000.0, color='red', ls='--', lw=1, alpha=0.6)
@@ -665,6 +680,9 @@ def run_cerebellum_conditioning(task, sim_id_dict, exp_params, storage, progress
         'accuracy_pct': accuracy,
         'outcomes': outcomes,
         'median_rt_ms': median_rt,
+        'rt_percentiles_ms': rt_percentiles,
+        'stimulus_latency_ms': latencies,
+        'rt_smooth_bins': rt_smooth_bins,
         'weight_stats': weight_stats,
         'rt_by_condition': {
             lbl: [None if np.isnan(r) else float(r) for r in rts]

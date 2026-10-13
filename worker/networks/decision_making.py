@@ -13,6 +13,11 @@ del modello `decision_making_nrp.py`.
     primo istante in cui la frequenza di una delle due popolazioni sale sopra soglia;
     la risposta è corretta se a salire è la popolazione stimolata.
 
+Modalità `dual` (modello acerebellare di Cavadini et al. 2025): due reti indipendenti,
+una uditiva e una visiva, ricevono gli stessi trial; la risposta audiovisiva è quella
+della rete più veloce (modello a gara). Mandare le due modalità sulla stessa rete
+(`audiovisual`) la satura, per questo il paper usa due reti.
+
 Ogni trial ha una realizzazione di Poisson indipendente (il codice originale
 riusava lo stesso treno in tutti i trial).
 """
@@ -25,21 +30,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.special import lambertw
 
+from backend.services.experiments import DECISION_DEFAULTS
 from worker import nest_utils
-from worker.analysis import binned_rate, ecdf, first_upward_crossing, median_or_none, poisson_trains, trailing_mean
-from worker.networks.generic import plot_population
+from worker.analysis import (
+    PAPER_PERCENTILES, binned_rate, ecdf, first_upward_crossing, median_or_none, paired_race,
+    percentiles, poisson_trains, race_model_inequality, trailing_mean,
+)
+from worker.networks.generic import plot_percentile_cdf, plot_population
 from worker.results import ResultStore
 
 logger = logging.getLogger(__name__)
 
 SIMULATION_CHUNK_MS = 500.0
-SMOOTHING_BINS = 10
-
-# Modality first-spike latencies (ms) — from data/config/execution_types.json
-MODALITY_LATENCY = {
-    "auditory": 150.0,
-    "visual": 220.0,
-}
 
 # Default decision network parameters — from
 # data/config/networks/decision_making_nrp.json (NEST 2.18 reference).
@@ -82,15 +84,18 @@ DEFAULT_NETWORK_PARAMS = {
 
 # Default experiment knobs — from execution_types.json + the legacy run loop.
 DEFAULT_EXPERIMENT = {
-    "modality": "audiovisual",   # auditory | visual | audiovisual
+    "modality": DECISION_DEFAULTS["modality"],   # auditory | visual | audiovisual | dual (due reti, vince la più veloce)
     "rate": 30.0,                # Hz of the sensory Poisson drive
     "number_of_neurons": 80,     # sensory afferents per side
     "stimulus_window_ms": 600.0, # stimulus is active within [latency, window]
     # L'attività persistente dell'attrattore dura circa 2 s dopo lo stimolo: con trial
     # più corti il vincitore del trial precedente sopprime la risposta al successivo.
-    "trial_slot_ms": 3000.0,
-    "num_trials": 12,            # legacy full run uses 60 (test_time 60000 ms)
+    "trial_slot_ms": DECISION_DEFAULTS["trial_slot_ms"],
+    "num_trials": DECISION_DEFAULTS["num_trials"],
     "threshold": 15.0,           # Hz; rate crossing that defines a response
+    "rt_smooth_bins": 5,         # finestra (in bin) della media mobile causale usata per la risposta, come nel paper
+    "auditory_latency_ms": 150.0,
+    "visual_latency_ms": 220.0,
     "bin_size_ms": 5.0,
     "seed": 1234,
     "order": 400,                # network size scale (legacy = 400)
@@ -237,30 +242,21 @@ def _build_network(nest, par, trains_a, trains_b, rng):
     return recorders
 
 
-def run_decision_making_experiment(task, sim_info, exp_params, storage, progress_cb):
-    import nest
+MODALITY_NAMES = {"auditory": "uditiva", "visual": "visiva", "audiovisual": "audiovisiva"}
 
-    cfg = {**DEFAULT_EXPERIMENT, **(exp_params.get("decision_making") or {})}
-    par = {**DEFAULT_NETWORK_PARAMS, **(exp_params.get("network_overrides") or {}), "order": int(cfg["order"])}
-    store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
-    seed = int(cfg["seed"])
+
+def _run_network(nest, name, cfg, par, sides, seed, store, prefix, progress):
+    """Simula una rete di decisione che riceve la modalità `name` e legge un tempo di
+    risposta per trial. Restituisce (tempi per trial con None se manca, dettagli, frequenze medie)."""
     rng = np.random.default_rng(seed)
-
-    modality = cfg["modality"]
-    if modality not in ("auditory", "visual", "audiovisual"):
-        raise ValueError(f"Modalità sconosciuta: {modality}")
-    latencies = [MODALITY_LATENCY[m] for m in ("auditory", "visual") if modality in (m, "audiovisual")]
+    latencies = [float(cfg[f"{m}_latency_ms"]) for m in ("auditory", "visual") if name in (m, "audiovisual")]
     trial_ms = float(cfg["trial_slot_ms"])
     window_ms = float(cfg["stimulus_window_ms"])
-    num_trials = int(cfg["num_trials"])
     threshold = float(cfg["threshold"])
     bin_ms = float(cfg["bin_size_ms"])
-    total_ms = trial_ms * num_trials
+    total_ms = trial_ms * len(sides)
     resolution = float(par["dt"])
 
-    # Lato stimolato per trial, bilanciato e in ordine casuale.
-    sides = [("pop_A", "pop_B")[i % 2] for i in range(num_trials)]
-    rng.shuffle(sides)
     n_afferents = int(cfg["number_of_neurons"])
     trains = {"pop_A": [[] for _ in range(n_afferents)], "pop_B": [[] for _ in range(n_afferents)]}
     for index, side in enumerate(sides):
@@ -271,55 +267,48 @@ def run_decision_making_experiment(task, sim_info, exp_params, storage, progress
                 train.extend(spikes)
     trains = {side: [sorted(set(train)) for train in side_trains] for side, side_trains in trains.items()}
 
-    progress_cb(5, "Costruzione della rete")
     nest_utils.init_kernel(nest, resolution, seed)
     recorders = _build_network(nest, par, trains["pop_A"], trains["pop_B"], rng)
-
     simulated = 0.0
     while simulated < total_ms:
         chunk = min(SIMULATION_CHUNK_MS, total_ms - simulated)
         nest.Simulate(chunk)
         simulated += chunk
-        progress_cb(10 + 80 * simulated / total_ms, f"Simulazione: {simulated / 1000:.1f} di {total_ms / 1000:.1f} s")
+        progress(simulated / total_ms, f"Rete {MODALITY_NAMES[name]}: {simulated / 1000:.1f} di {total_ms / 1000:.1f} s")
 
-    progress_cb(92, "Analisi")
     spikes = {pop_id: nest_utils.spike_events(recorder) for pop_id, (recorder, _) in recorders.items()}
     sizes = {pop_id: size for pop_id, (_, size) in recorders.items()}
-    store.put_json("spikes.json", {
-        "metadata": {"simulation_id": sim_info["sim_id"], "total_ms": total_ms, "seed": seed},
-        "spikes": spikes,
-    }, in_zip=False)
     for pop_id, events in spikes.items():
-        plot_population(store, pop_id, events, sizes[pop_id], total_ms, None)
+        plot_population(store, f"{prefix}{pop_id}", events, sizes[pop_id], total_ms, None)
 
     rates = {}
     for pop_id in ("pop_A", "pop_B"):
         bin_starts, raw = binned_rate(spikes[pop_id]["times"], sizes[pop_id], bin_ms, total_ms)
-        rates[pop_id] = trailing_mean(raw, SMOOTHING_BINS)
+        rates[pop_id] = trailing_mean(raw, int(cfg["rt_smooth_bins"]))
 
     # Risposta di un trial: la prima popolazione che sale sopra soglia dopo l'arrivo dello stimolo.
-    response_times, details, correct = [], [], 0
+    response_times, details = [], []
+    spike_times = {pop_id: np.asarray(spikes[pop_id]["times"]) for pop_id in ("pop_A", "pop_B")}
     for index, side in enumerate(sides):
         start = index * trial_ms
+        in_trial = {pop_id: int(np.count_nonzero((times >= start) & (times < start + trial_ms)))
+                    for pop_id, times in spike_times.items()}
         response, winner = None, "none"
         for pop_id, rate in rates.items():
             crossing = first_upward_crossing(bin_starts, rate, threshold, start + min(latencies), start + trial_ms)
             if crossing is not None and (response is None or crossing < response):
                 response, winner = crossing, pop_id
-        if winner == side:
-            correct += 1
-            response_times.append(response - start)
+        response_times.append(response - start if winner == side else None)
         details.append({
             "trial": index + 1,
             "active_stimuli": [side],
-            "condition_label": modality,
+            "condition_label": name,
             "expected_winner": side,
             "actual_winner": winner,
             "is_correct": winner == side,
             "response_time_ms": None if response is None else round(response - start, 1),
-            "net_evidence": 0,
+            "net_evidence": in_trial["pop_A"] - in_trial["pop_B"],
         })
-    missed = sum(1 for row in details if row["actual_winner"] == "none")
 
     fig, ax = plt.subplots(figsize=(11, 4))
     for index, side in enumerate(sides):
@@ -328,29 +317,105 @@ def run_decision_making_experiment(task, sim_info, exp_params, storage, progress
     ax.plot(bin_starts, rates["pop_A"], color="#0f6e6e", lw=1.3, label="pop_A")
     ax.plot(bin_starts, rates["pop_B"], color="#b42318", lw=1.3, label="pop_B")
     ax.axhline(threshold, color="#1c1c1a", ls="--", lw=1, label=f"Soglia ({threshold:g} Hz)")
-    ax.set(title="Competizione tra pop_A e pop_B (sfondo: lato stimolato)", xlabel="Tempo (ms)", ylabel="Hz per neurone")
+    ax.set(title=f"Rete {MODALITY_NAMES[name]}: competizione tra pop_A e pop_B (sfondo: lato stimolato)",
+           xlabel="Tempo (ms)", ylabel="Hz per neurone")
     ax.legend(fontsize=9, loc="upper right")
-    store.put_figure("exp_competizione_A_B.png", fig)
+    store.put_figure(f"exp_competizione_rete_{MODALITY_NAMES[name]}.png", fig)
+
+    mean_rate = {pop_id: round(len(spikes[pop_id]["times"]) * 1000.0 / total_ms / sizes[pop_id], 2) for pop_id in spikes}
+    return response_times, details, mean_rate, spikes
+
+
+def run_decision_making_experiment(sim_info, exp_params, storage, progress_cb):
+    import nest
+
+    cfg = {**DEFAULT_EXPERIMENT, **(exp_params.get("decision_making") or {})}
+    par = {**DEFAULT_NETWORK_PARAMS, **(exp_params.get("network_overrides") or {}), "order": int(cfg["order"])}
+    store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
+    seed = int(cfg["seed"])
+
+    modality = cfg["modality"]
+    if modality not in ("auditory", "visual", "audiovisual", "dual"):
+        raise ValueError(f"Modalità sconosciuta: {modality}")
+    networks = ["auditory", "visual"] if modality == "dual" else [modality]
+    num_trials = int(cfg["num_trials"])
+    trial_ms = float(cfg["trial_slot_ms"])
+    bin_ms = float(cfg["bin_size_ms"])
+
+    # Lato stimolato per trial, bilanciato e in ordine casuale: lo stesso per tutte le reti.
+    sides = [("pop_A", "pop_B")[i % 2] for i in range(num_trials)]
+    np.random.default_rng(seed).shuffle(sides)
+
+    results, all_spikes = {}, {}
+    for index, name in enumerate(networks):
+        prefix = f"{name}_" if modality == "dual" else ""
+        share = lambda fraction, phase, index=index: progress_cb(5 + 85 * (index + fraction) / len(networks), phase)
+        # Seed diversi: due reti con lo stesso rumore di fondo non sarebbero indipendenti.
+        rts, details, mean_rate, spikes = _run_network(nest, name, cfg, par, sides, seed + index, store, prefix, share)
+        results[name] = {"response_times": rts, "details": details, "mean_rate": mean_rate}
+        all_spikes.update({f"{prefix}{pop_id}": events for pop_id, events in spikes.items()})
+
+    progress_cb(92, "Analisi")
+    store.put_json("spikes.json", {
+        "metadata": {"simulation_id": sim_info["sim_id"], "total_ms": trial_ms * num_trials, "seed": seed},
+        "spikes": all_spikes,
+    }, in_zip=False)
+
+    store.put_json("accuracy_metrics.json", {"metrics": [{
+        "comparison": f"Rete {MODALITY_NAMES[name]}: popolazione stimolata contro popolazione che risponde per prima",
+        "accuracy_percent": round(100.0 * sum(row["is_correct"] for row in outcome["details"]) / num_trials, 2) if num_trials else None,
+        "total_valid_trials": num_trials,
+        "correct_trials": sum(row["is_correct"] for row in outcome["details"]),
+        "trial_details": outcome["details"],
+    } for name, outcome in results.items()]})
+
+    answered = {name: [rt for rt in outcome["response_times"] if rt is not None] for name, outcome in results.items()}
+    series = {
+        "auditory": ("Uditivo", "--s", "#1c1c1a", "#1c1c1a"),
+        "visual": ("Visivo", "--o", "#1c1c1a", "#1c1c1a"),
+        "audiovisual": ("Audiovisivo", "-D", "#0f6e6e", "#ffffff"),
+    }
+    curves = {series[name][0]: (answered[name], *series[name][1:]) for name in networks}
+    race = []
+    if modality == "dual":
+        # Modello acerebellare: non c'è integrazione, risponde la rete più veloce.
+        race = paired_race(results["auditory"]["response_times"], results["visual"]["response_times"])
+        curves["Audiovisivo = modello a gara"] = (race, "-o", "#9a9a92", "#ffffff")
+        rmi = race_model_inequality(answered["visual"], answered["auditory"], race, num_trials, num_trials, num_trials, step_ms=bin_ms)
+        store.put_json("race_model.json", {"race_model": [{
+            "population": "Reti uditiva e visiva",
+            "note": "In questo modello la risposta AV è quella della rete più veloce, trial per trial: "
+                    "la disuguaglianza non può essere violata.",
+            "method": "rate_threshold_crossing",
+            "n_V": len(answered["visual"]), "n_A": len(answered["auditory"]), "n_AV": len(race),
+            "trials": {"V": num_trials, "A": num_trials, "AV": num_trials},
+            "median_rt_ms": {"V": median_or_none(answered["visual"]), "A": median_or_none(answered["auditory"]),
+                             "AV": median_or_none(race)},
+            "percentile_levels": list(PAPER_PERCENTILES),
+            "percentiles_ms": {"V": percentiles(answered["visual"]), "A": percentiles(answered["auditory"]),
+                               "AV": percentiles(race)},
+            "max_rmi_violation": round(rmi["max_violation"], 4),
+            "p_value": rmi["p_value"],
+            "has_facilitation": rmi["significant"],
+        }]})
+    plot_percentile_cdf(store, "exp_percentili_come_nel_paper.png",
+                        "Tempi di risposta ai percentili 5-95 (reti corticali)", curves)
 
     fig, ax = plt.subplots(figsize=(8, 5))
     grid = np.arange(0.0, trial_ms + bin_ms, bin_ms)
-    ax.step(grid, ecdf(response_times, grid, num_trials), where="post", color="#0f6e6e", lw=2,
-            label=f"{modality} ({len(response_times)}/{num_trials} risposte corrette)")
+    for label, (rts, _, color, _) in curves.items():
+        ax.step(grid, ecdf(rts, grid, num_trials), where="post", lw=2, color=color,
+                ls="--" if label == "Visivo" else "-", label=f"{label} ({len(rts)}/{num_trials} risposte corrette)")
     ax.set(title="Tempi di risposta", xlabel="Tempo dall'inizio del trial (ms)",
-           ylabel="Frazione dei trial con risposta corretta", ylim=(0, 1.05))
+           ylabel="Frazione dei trial con risposta corretta", ylim=(0, 1.05), xlim=(0, min(trial_ms, 1000.0)))
     ax.legend(fontsize=9)
     ax.grid(alpha=0.3)
     store.put_figure("exp_tempi_di_risposta.png", fig)
 
-    store.put_json("accuracy_metrics.json", {"metrics": [{
-        "comparison": "Popolazione stimolata contro popolazione che risponde per prima",
-        "accuracy_percent": round(100.0 * correct / num_trials, 2) if num_trials else None,
-        "total_valid_trials": num_trials,
-        "correct_trials": correct,
-        "trial_details": details,
-    }]})
-
-    mean_rate = {pop_id: len(spikes[pop_id]["times"]) * 1000.0 / total_ms / sizes[pop_id] for pop_id in spikes}
+    reported = race if modality == "dual" else answered[modality]
+    first = results[networks[0]]
+    correct = sum(row["is_correct"] for row in first["details"])
+    missed = sum(1 for row in first["details"] if row["actual_winner"] == "none")
     metrics = {
         "experiment": "audiovisual_decision_making",
         "modality": modality,
@@ -360,13 +425,16 @@ def run_decision_making_experiment(task, sim_info, exp_params, storage, progress
         "correct_trials": correct,
         "wrong_trials": num_trials - correct - missed,
         "missed_trials": missed,
-        "response_times_ms": [round(rt, 1) for rt in response_times],
-        "median_response_time_ms": median_or_none(response_times),
-        "mean_response_time_ms": round(float(np.mean(response_times)), 1) if response_times else None,
-        "avg_rate_A_hz": round(mean_rate["pop_A"], 2),
-        "avg_rate_B_hz": round(mean_rate["pop_B"], 2),
-        "avg_rate_inh_hz": round(mean_rate["pop_inh"], 2),
-        "threshold_hz": threshold,
+        "response_times_ms": [round(rt, 1) for rt in reported],
+        "median_response_time_ms": median_or_none(reported),
+        "mean_response_time_ms": round(float(np.mean(reported)), 1) if reported else None,
+        "rt_percentiles_ms": {name: percentiles(answered[name]) for name in networks} | ({"race_model": percentiles(race)} if race else {}),
+        "median_by_network_ms": {name: median_or_none(answered[name]) for name in networks},
+        "avg_rate_A_hz": first["mean_rate"]["pop_A"],
+        "avg_rate_B_hz": first["mean_rate"]["pop_B"],
+        "avg_rate_inh_hz": first["mean_rate"]["pop_inh"],
+        "threshold_hz": float(cfg["threshold"]),
+        "stimulus_latency_ms": {"auditory": float(cfg["auditory_latency_ms"]), "visual": float(cfg["visual_latency_ms"])},
         "network_order": par["order"],
         "n_neurons_per_excitatory_pop": 2 * par["order"],
     }

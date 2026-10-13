@@ -29,6 +29,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from backend.services.experiments import MSI_TEST_DEFAULTS, MSI_TRAIN_DEFAULTS
 from worker import nest_utils
 from worker.analysis import (
     binned_rate, cf_gated_ltd, ecdf, first_crossing, median_or_none, poisson_trains,
@@ -97,7 +98,7 @@ def make_windows(n_trials: int, trial_ms: float, stim_ms: float, iti_range, rng,
     return windows, cursor
 
 
-def run_cerebellum_msi_race(task, sim_info, exp_params, storage, progress_cb):
+def run_cerebellum_msi_race(sim_info, exp_params, storage, progress_cb):
     import nest
 
     store = ResultStore(storage, f"results/{sim_info['owner_id']}/sim_{sim_info['sim_id']}")
@@ -113,17 +114,19 @@ def run_cerebellum_msi_race(task, sim_info, exp_params, storage, progress_cb):
     n_sources = int(test_cfg.get("n_sources", 20))
 
     # --- Timeline ---
-    n_train = int(train_cfg.get("n_trials", 45))
+    n_train = int(train_cfg.get("n_trials", MSI_TRAIN_DEFAULTS["n_trials"]))
     train_windows, train_end = make_windows(
-        n_train, float(train_cfg.get("trial_duration_ms", 1000.0)), float(train_cfg.get("stimulus_duration_ms", 600.0)),
-        train_cfg.get("iti_range_ms") or [500, 1000], rng, resolution, 0.0)
+        n_train, float(train_cfg.get("trial_duration_ms", MSI_TRAIN_DEFAULTS["trial_duration_ms"])),
+        float(train_cfg.get("stimulus_duration_ms", 600.0)),
+        train_cfg.get("iti_range_ms") or MSI_TRAIN_DEFAULTS["iti_range_ms"], rng, resolution, 0.0)
     train_modalities = [("VIS", "AUD")[i % 2] for i in range(n_train)]
     rng.shuffle(train_modalities)
 
-    n_test = int(test_cfg.get("n_trials", 100))
+    n_test = int(test_cfg.get("n_trials", MSI_TEST_DEFAULTS["n_trials"]))
     test_windows, total_ms = make_windows(
-        n_test, float(test_cfg.get("trial_duration_ms", 1000.0)), float(test_cfg.get("stimulus_duration_ms", 600.0)),
-        test_cfg.get("iti_range_ms") or [200, 400], rng, resolution, train_end)
+        n_test, float(test_cfg.get("trial_duration_ms", MSI_TEST_DEFAULTS["trial_duration_ms"])),
+        float(test_cfg.get("stimulus_duration_ms", 600.0)),
+        test_cfg.get("iti_range_ms") or MSI_TEST_DEFAULTS["iti_range_ms"], rng, resolution, train_end)
     weights = np.array([weight for _, _, weight in TEST_CONDITIONS])
     test_conditions = [TEST_CONDITIONS[i] for i in rng.choice(len(TEST_CONDITIONS), size=n_test, p=weights / weights.sum())]
 
@@ -137,7 +140,8 @@ def run_cerebellum_msi_race(task, sim_info, exp_params, storage, progress_cb):
     for pop in topology["populations"]:
         nodes = nest_utils.create_population(nest, pop["neuron_model"], pop["size"], pop.get("params"))
         populations[pop["id"]] = nodes
-        recorders[pop["id"]], sizes[pop["id"]] = nest_utils.record_spikes(nest, nodes)
+        if not nest_utils.is_stimulus_model(pop["neuron_model"]):
+            recorders[pop["id"]], sizes[pop["id"]] = nest_utils.record_spikes(nest, nodes)
     missing = [pop_id for pop_id in ("GR", "PC_A", "IO_A", "DCN_A", "DCN_B") if pop_id not in populations]
     if missing:
         raise ValueError(f"La rete non ha le popolazioni richieste dall'esperimento: {', '.join(missing)}")
@@ -295,6 +299,7 @@ def run_cerebellum_msi_race(task, sim_info, exp_params, storage, progress_cb):
         "reaction_times_ms": {label: [round(rt, 1) for rt in rts] for label, rts in reaction_times.items()},
         "winner_counts": winner_counts,
         "max_rmi_violation": 0.0,
+        "p_value": None,
         "has_facilitation": False,
     }
     if all(reaction_times[label] for label in ("V", "A", "AV")):
@@ -303,7 +308,8 @@ def run_cerebellum_msi_race(task, sim_info, exp_params, storage, progress_cb):
         plot_race_model(store, "rmi_DCN_A.png", rmi, reaction_times, trial_counts,
                         "Race Model Inequality: DCN", "Tempo di risposta (ms)")
         rmi_result["max_rmi_violation"] = round(rmi["max_violation"], 4)
-        rmi_result["has_facilitation"] = rmi["max_violation"] > 0.05
+        rmi_result["p_value"] = rmi["p_value"]
+        rmi_result["has_facilitation"] = rmi["significant"]
     store.put_json("race_model.json", {"race_model": [rmi_result]})
 
     # Attivazione DCN e CDF dei tempi di risposta

@@ -9,17 +9,16 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from backend.core.nest_models import SENSORY_STIMULUS, SPIKE_TRAIN_STIMULUS
 from worker import nest_utils
 from worker.analysis import (
-    binned_rate, decide, ecdf, first_crossing, median_or_none, poisson_trains,
-    race_model_inequality, snap, trailing_mean,
+    PAPER_PERCENTILES, binned_rate, decide, ecdf, first_crossing, median_or_none, percentiles,
+    poisson_trains, race_model_inequality, snap, trailing_mean,
 )
 from worker.results import ResultStore
 
 logger = logging.getLogger(__name__)
 
-SENSORY_STIMULUS = "legacy_sensory_stimulus"
-SPIKE_TRAIN_STIMULUS = "spike_train_stimulus"
 SIMULATION_CHUNK_MS = 500.0
 PSTH_BIN_MS = 50.0
 RESPONSE_SMOOTHING_BINS = 10
@@ -88,7 +87,7 @@ def stimulus_spike_trains(device: dict, trials: list, total_ms: float, rng, reso
     return [sorted(set(train)) for train in trains]
 
 
-def run_generic_experiment(task, sim_info, exp_params, storage, progress_cb):
+def run_generic_experiment(sim_info, exp_params, storage, progress_cb):
     import nest
 
     topology = sim_info["network_definition"].get("topology", {})
@@ -133,6 +132,7 @@ def run_generic_experiment(task, sim_info, exp_params, storage, progress_cb):
             if trains:
                 devices[device["id"]] = nest_utils.set_spike_trains(nest, trains)
         else:
+            nest_utils.check_model(nest, device["model"], ("stimulator",))
             params = nest_utils.sanitize_params(nest, device.get("params") or {})
             devices[device["id"]] = nest.Create(device["model"], int(device.get("size", 1)), params=params)
             # Generatori NEST: nei protocolli a trial vanno accesi e spenti a mano.
@@ -391,8 +391,25 @@ def race_model(store, pop_id, times, trials):
         "median_rt_ms": {condition: median_or_none(values) for condition, values in latencies.items()},
         "reaction_times_ms": {condition: [round(v, 1) for v in values] for condition, values in latencies.items()},
         "max_rmi_violation": round(rmi["max_violation"], 4),
-        "has_facilitation": rmi["max_violation"] > 0.05,
+        "p_value": rmi["p_value"],
+        "has_facilitation": rmi["significant"],
     }
+
+
+def plot_percentile_cdf(store, filename, title, series: dict) -> None:
+    """Distribuzioni dei tempi di risposta ai percentili 5-95, come nella Fig. 9 di
+    Cavadini et al. (2025). `series`: etichetta → (tempi, stile matplotlib, colore, riempimento)."""
+    fig, ax = plt.subplots(figsize=(7, 6))
+    levels = np.array(PAPER_PERCENTILES) / 100.0
+    for label, (rts, style, color, fill) in series.items():
+        if len(rts):
+            ax.plot(percentiles(rts), levels, style, color=color, markerfacecolor=fill, markersize=7, lw=2,
+                    label=f"{label} (n={len(rts)})")
+    ax.set(title=title, xlabel="Tempo di risposta (ms)", ylabel="Probabilità cumulativa", ylim=(0, 1))
+    ax.set_yticks(np.arange(0.0, 1.01, 0.1))
+    ax.legend(fontsize=9, loc="lower right")
+    ax.grid(alpha=0.3)
+    store.put_figure(filename, fig)
 
 
 def plot_race_model(store, filename, rmi, rts, trial_counts, title, xlabel) -> None:
