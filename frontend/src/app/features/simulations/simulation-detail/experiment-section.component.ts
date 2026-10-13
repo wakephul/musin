@@ -191,7 +191,7 @@ export class ExperimentSectionComponent {
           { label: 'Risposte corrette', value: formatNumber(Array.isArray(responses) ? responses.length : null) },
           { label: 'Tempo di risposta mediano', ...responseTime(metrics['median_response_time_ms']) },
           { label: 'Tempo di risposta medio', ...responseTime(metrics['mean_response_time_ms']) },
-          ...NETWORK_LABELS.filter(([key]) => byNetwork && key in byNetwork).map(([key, label]) => ({
+          ...NETWORK_LABELS.filter(([key]) => byNetwork && Object.keys(byNetwork).length > 1 && key in byNetwork).map(([key, label]) => ({
             label: `Tempo di risposta mediano, ${label}`,
             ...responseTime(byNetwork?.[key]),
           })),
