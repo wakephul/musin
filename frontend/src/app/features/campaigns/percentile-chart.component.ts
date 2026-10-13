@@ -65,7 +65,7 @@ function markerPath(shape: 'square' | 'circle' | 'diamond', x: number, y: number
           Percentile
         </text>
         @for (line of p.lines; track line.label) {
-          <g [attr.opacity]="line.reference ? 0.6 : 1">
+          <g [attr.opacity]="line.reference ? 0.75 : 1">
             <path
               [attr.d]="line.path"
               fill="none"
@@ -147,7 +147,7 @@ export class PercentileChartComponent {
           label: entry.label,
           reference: entry.reference,
           color: style.color,
-          dash: entry.reference ? '1.5 3' : style.dash,
+          dash: entry.reference ? '2 3' : style.dash,
           path: points.map(([px, py], index) => `${index ? 'L' : 'M'}${px.toFixed(1)},${py.toFixed(1)}`).join(''),
           markers: points.map(([px, py]) => markerPath(style.marker, +px.toFixed(1), +py.toFixed(1))).join(''),
           legendMarker: markerPath(style.marker, 13, 5),

@@ -170,8 +170,8 @@ const REFRESH_MS = 5000;
             <section class="panel" aria-labelledby="results-title">
               <div class="panel-header">
                 <h2 id="results-title" class="section-title">Tempi di risposta</h2>
-                @if (summary(); as s) {
-                  <span class="text-sm text-muted">su {{ completedText(s.completed) }}</span>
+                @if (summary()?.completed; as completed) {
+                  <span class="text-sm text-muted">su {{ completedText(completed) }}</span>
                 }
               </div>
 
@@ -317,14 +317,14 @@ const REFRESH_MS = 5000;
                   @for (group of point()?.groups ?? []; track group.population) {
                     <article class="space-y-4">
                       <h3 class="subsection-title">
-                        <span class="num">{{ group.population }}</span>
+                        <span [class.num]="!group.population.includes(' ')">{{ group.population }}</span>
                         @if (c.sweep) {
                           <span class="font-normal text-muted">
                             , {{ sweepName() }} <span class="num">{{ valueOf(point()!.value) }}</span></span
                           >
                         }
                       </h3>
-                      <div class="grid items-start gap-5 lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)]">
+                      <div class="space-y-4">
                         <div class="space-y-3">
                           <div class="overflow-x-auto rounded-md border border-line">
                             <table class="table-list">
@@ -413,6 +413,7 @@ const REFRESH_MS = 5000;
                           </p>
                         </div>
                         <app-percentile-chart
+                          class="max-w-3xl"
                           [levels]="group.percentile_levels"
                           [series]="series(group)"
                           [label]="'Tempi di risposta ai percentili, ' + group.population"
