@@ -56,7 +56,10 @@ or create an account from the sign-in page (`ALLOW_REGISTRATION=false` turns tha
      into a training and a test phase.
 3. **Watch and read the results** on the simulation page: progress, _Interrompi_,
    then plots, metrics and downloads (`graphs.zip`, `spikes.json`).
-4. **Stimuli** (_Stimoli_): upload recorded spike trains (JSON, CSV or HDF5, times in
+4. **Repeat it as a campaign.** With _Ripetizioni_ above 1 the same launch runs with
+   consecutive seeds, and _Parametro da variare_ repeats it for each value of one
+   parameter. See [Campaigns](#campaigns).
+5. **Stimuli** (_Stimoli_): upload recorded spike trains (JSON, CSV or HDF5, times in
    ms) and replay them through a "Treni di spike da file" device.
 
 ## The experiments
@@ -132,6 +135,37 @@ nothing is integrated and the inequality cannot be violated. `auditory`, `visual
 simulation, as in the original model, and the network sits close to threshold: the
 median response time moves by tens of milliseconds from one seed to the next.
 
+## Campaigns
+
+One simulation of the cerebellar network with 45 trials per condition leaves the median
+response time uncertain by about ±40 ms. A campaign runs the same experiment with
+several seeds and pools the response times, and can also vary one numeric parameter over
+a list of values: every value is simulated with every seed, up to 50 simulations in all.
+The simulator still runs them one at a time.
+
+The campaign page shows, for each value of the parameter:
+
+- trials, responses and median response time per condition, with a 95 % confidence
+  interval obtained by resampling;
+- the Race Model Inequality tested on all the trials together;
+- the response times at the percentiles 5 to 95, as a plot;
+- the medians of each simulation, to see how much they move from seed to seed.
+
+**Reference data.** _Confronta con_ puts a set of measured response times next to the
+simulated ones: its median, the difference between the two medians with a confidence
+interval, and its percentiles on the plot. The response times behind Fig. 9 of the
+paper are included, one set for the cerebellar network and one for the cortical ones.
+Other sets can be uploaded as a CSV with two columns, condition (`A`, `V`, `AV`, `race`)
+and response time in ms.
+
+A campaign summarises experiments that report V, A and AV response times: the three
+predefined ones (the decision network only with two networks) and a trial protocol with
+the Race Model Inequality switched on. For the others it is a way to launch the
+repetitions together; the results stay in the single simulations.
+
+Campaign simulations do not save `spikes.json` unless asked: two cortical networks
+produce about 200 MB of spikes per simulation.
+
 ### How close this is to the paper
 
 Median response times in ms, three seeds pooled; in brackets the 95 % bootstrap
@@ -178,10 +212,13 @@ them from the API through signed links that expire after one hour.
 
 ```
 backend/            FastAPI app
-  api/routers/      auth, networks, simulations, stimuli, files (signed downloads)
+  api/routers/      auth, networks, simulations, campaigns, references, stimuli,
+                    files (signed downloads)
   core/             settings, database session, security, NEST model catalogue
+  data/             reference response times from the paper
   migrations/       Alembic revisions, applied at startup
-  services/         file storage, experiment rules, stimulus file parser
+  services/         file storage, experiment rules, launching, campaign summary,
+                    stimulus and reference file parsers
   tests/
 worker/
   tasks.py          Celery task: picks the experiment, tracks status and abort
@@ -215,6 +252,8 @@ or directly on `http://localhost:8010` from the same machine. Interactive docs:
 | `/networks`    | `GET`, `POST`, `GET/PUT/DELETE /{id}`, `POST /{id}/fork`, `GET /models` (NEST model catalogue)      |
 | `/simulations` | `GET` (paginated), `POST /launch`, `GET /{id}`, `GET /{id}/status`, `POST /{id}/abort`, `GET /{id}/results`, `DELETE /{id}` |
 | `/stimuli`     | `GET`, `POST /upload`, `GET /{id}`, `DELETE /{id}`                                                  |
+| `/campaigns`   | `GET`, `POST`, `GET/PUT/DELETE /{id}`, `GET /{id}/summary`, `POST /{id}/abort`                      |
+| `/references`  | `GET`, `POST` (CSV upload), `DELETE /{id}`                                                          |
 
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:3000/api/v1/auth/login \
@@ -257,6 +296,17 @@ may only name devices listed in `inputs`:
 The Race Model Inequality of a trial protocol reads the conditions labelled `V`, `A`
 and `AV`. Parameters that are negative, not finite or beyond the size limits are
 refused with a 422 and the reason.
+
+A campaign takes the same `params` as JSON, the seeds and, optionally, the parameter
+to vary as a dotted path into `params`:
+
+```bash
+curl -s -X POST http://localhost:3000/api/v1/campaigns \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"network_id": 1, "seeds": [11, 12, 13],
+       "params": {"builtin": "cerebellum_conditioning", "n_train": 15, "n_test": 45},
+       "sweep": {"path": "aud_latency_ms", "values": [150, 165, 180]}}'
+```
 
 ## Development
 
