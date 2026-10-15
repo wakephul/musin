@@ -212,7 +212,9 @@ with it.
 
 Plots, metrics, spike files and uploaded stimuli are plain files in the Docker volume
 `musin_storage`, mounted at `/data` in both `api` and `worker`. The browser downloads
-them from the API through signed links that expire after one hour.
+them from the API through signed links that expire after one hour. Deleting a simulation
+deletes its files; at every start the worker also removes result folders whose
+simulation no longer exists.
 
 ```
 backend/            FastAPI app

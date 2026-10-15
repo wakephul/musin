@@ -52,6 +52,24 @@ def fail_interrupted_simulations(**_kwargs) -> None:
         db.commit()
 
 
+@worker_ready.connect
+def remove_orphan_results(**_kwargs) -> None:
+    """Elimina le cartelle dei risultati che non hanno più una simulazione: quelle lasciate
+    dalle versioni con MinIO, che cancellando una simulazione non toglievano i suoi file.
+    Una cartella nasce solo mentre il worker calcola una simulazione esistente, quindi
+    all'avvio una cartella senza simulazione non serve a nessuno."""
+    results = storage.root / "results"
+    if not results.is_dir():
+        return
+    with SessionLocal() as db:
+        existing = {(owner, sim) for owner, sim in db.query(Simulation.owner_id, Simulation.id)}
+    for folder in results.glob("*/sim_*"):
+        owner, sim = folder.parent.name, folder.name.removeprefix("sim_")
+        if folder.is_dir() and owner.isdigit() and sim.isdigit() and (int(owner), int(sim)) not in existing:
+            storage.delete_tree(f"results/{owner}/{folder.name}")
+            logger.info("Rimossa la cartella %s: la simulazione non esiste più.", folder.name)
+
+
 @celery_app.task(bind=True, name="worker.tasks.run_simulation_task")
 def run_simulation_task(self: Task, simulation_id: int) -> dict:
     with SessionLocal() as db:

@@ -168,3 +168,14 @@ def test_campaign_simulations_do_not_save_their_spikes(monkeypatch, files, simul
         db.commit()
     tasks.run_simulation_task.run(simulation_id)
     assert sorted(name.rsplit("/", 1)[-1] for name in files.list("results")) == ["graphs.zip", "race_model.json"]
+
+
+def test_result_folders_without_a_simulation_are_removed_at_start(files, simulation_id):
+    with SessionLocal() as db:
+        owner = db.get(Simulation, simulation_id).owner_id
+    files.write(f"results/{owner}/sim_{simulation_id}/kept.png", b"x")
+    files.write(f"results/{owner}/sim_999999/orphan.png", b"x")       # simulazione eliminata
+    files.write(f"results/{owner + 1}/sim_{simulation_id}/orphan.png", b"x")  # stesso id, altro utente
+    files.write(f"results/{owner}/graphs.zip", b"x")                   # non è una cartella di simulazione
+    tasks.remove_orphan_results()
+    assert sorted(files.list("results")) == [f"results/{owner}/graphs.zip", f"results/{owner}/sim_{simulation_id}/kept.png"]
