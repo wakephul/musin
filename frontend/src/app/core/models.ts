@@ -211,17 +211,17 @@ export interface RaceModelResult {
   has_facilitation: boolean;
   /** Avvertenza dell'esperimento su come leggere il risultato. */
   note?: string;
-  /** Probabilità di una violazione così grande se il modello a gara vale; null se i trial sono troppo pochi. */
+  /** Probabilità di una violazione così grande se il Race Model vale; null se i trial sono troppo pochi. */
   p_value?: number | null;
   /** rate_threshold_crossing: superamento di soglia della frequenza; first_spike_latency: primo spike. */
   method?: 'rate_threshold_crossing' | 'first_spike_latency';
   /** Trial presentati per condizione (n_* conta solo quelli con risposta). */
   trials?: Record<string, number>;
   median_rt_ms?: Record<string, number | null>;
-  /** Percentili (5, 15, …, 95) e relativi tempi per condizione; `race` è il modello a gara a coppie. */
+  /** Percentili (5, 15, …, 95) e relativi tempi per condizione; `race` è il Race Model a coppie. */
   percentile_levels?: number[];
   percentiles_ms?: Record<string, number[]>;
-  /** A quanti di quei percentili la risposta AV è più veloce del modello a gara. */
+  /** A quanti di quei percentili la risposta AV è più veloce del Race Model. */
   percentiles_av_faster_than_race?: number;
 }
 
@@ -330,7 +330,7 @@ export interface ReferenceComparison {
 }
 
 export interface CampaignCondition {
-  /** A, V, AV oppure race (modello a gara a coppie). */
+  /** A, V, AV oppure race (Race Model a coppie). */
   label: string;
   trials: number | null;
   responses: number;

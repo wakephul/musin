@@ -48,7 +48,7 @@ const DESCRIPTIONS: Record<BuiltinKind, string> = {
   cerebellum_conditioning:
     "Rete cerebellare di Cavadini et al. (2025), il modello del gruppo di controllo. Addestra le vie A e B con stimoli " +
     "uditivi o visivi e un segnale di insegnamento sull'oliva inferiore; il test presenta trial uditivi, visivi e " +
-    'audiovisivi a plasticità spenta e confronta la risposta audiovisiva con il modello a gara.',
+    'audiovisivi a plasticità spenta e confronta la risposta audiovisiva con il Race Model.',
   decision_making:
     'Rete corticale di Cavadini et al. (2025), il modello del paziente senza cervelletto. Due popolazioni eccitatorie ' +
     'in competizione, con inibizione comune, ricevono lo stimolo su un lato per trial (rete attrattore di Wang). ' +

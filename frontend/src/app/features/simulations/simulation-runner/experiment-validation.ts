@@ -106,7 +106,7 @@ const DECISION_META: Record<string, FieldMeta> = {
       { value: 'audiovisual', label: 'Audiovisiva, sulla stessa rete' },
       { value: 'dual', label: 'Due reti, una uditiva e una visiva: risponde la più veloce' },
     ],
-    help: 'Con due reti indipendenti la risposta audiovisiva è quella del modello a gara: è il modello senza cervelletto di Cavadini et al. (2025).',
+    help: 'Con due reti indipendenti la risposta audiovisiva è quella del Race Model: è il modello senza cervelletto di Cavadini et al. (2025).',
   },
   num_trials: count('Numero di trial'),
   rate: nonNegative('Frequenza dello stimolo (Hz)'),

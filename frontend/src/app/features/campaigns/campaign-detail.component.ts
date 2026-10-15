@@ -390,19 +390,19 @@ const REFRESH_MS = 5000;
                           }
                           @if (group.rmi; as rmi) {
                             <p>
-                              Violazione della disuguaglianza del modello a gara:
+                              Violazione della disuguaglianza del Race Model:
                               <strong>{{ rmi.significant ? 'sì' : 'no' }}</strong>
                               <span class="num"> ({{ rmiDetail(rmi) }})</span>
                             </p>
                           } @else {
                             <p class="text-sm text-muted">
-                              Disuguaglianza del modello a gara non calcolata: serve almeno una risposta in ciascuna delle
+                              Disuguaglianza del Race Model non calcolata: serve almeno una risposta in ciascuna delle
                               condizioni V, A e AV.
                             </p>
                           }
                           @if (group.percentiles_av_faster_than_race !== null) {
                             <p class="text-sm">
-                              Audiovisivo più veloce del modello a gara a
+                              Audiovisivo più veloce del Race Model a
                               <span class="num">{{ group.percentiles_av_faster_than_race }}</span>
                               percentili su
                               <span class="num">{{ group.percentile_levels.length }}</span

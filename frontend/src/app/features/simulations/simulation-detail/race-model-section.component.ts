@@ -9,7 +9,7 @@ const PERCENTILE_COLUMNS = [
   { key: 'A', label: 'A' },
   { key: 'V', label: 'V' },
   { key: 'AV', label: 'AV' },
-  { key: 'race', label: 'Modello a gara' },
+  { key: 'race', label: 'Race Model' },
 ];
 
 function percentileTable(stats: RaceModelStats | null | undefined) {
@@ -31,7 +31,7 @@ function percentileTable(stats: RaceModelStats | null | undefined) {
   host: { class: 'block space-y-4' },
   template: `
     <p class="text-sm text-muted">
-      Confronto tra la distribuzione cumulativa dei tempi di risposta AV e il limite del modello a gara.
+      Confronto tra la distribuzione cumulativa dei tempi di risposta AV e il limite del Race Model.
     </p>
     @for (entry of entries(); track $index) {
       <article class="panel">
@@ -94,7 +94,7 @@ function percentileTable(stats: RaceModelStats | null | undefined) {
                     <caption class="px-4 py-2 text-left text-xs text-muted">
                       Tempi di risposta ai percentili (ms), come nella Fig. 9 di Cavadini et al. (2025).
                       @if (stats.percentiles_av_faster_than_race !== undefined) {
-                        AV più veloce del modello a gara a
+                        AV più veloce del Race Model a
                         <span class="num">{{ stats.percentiles_av_faster_than_race }}</span>
                         {{ stats.percentiles_av_faster_than_race === 1 ? 'percentile' : 'percentili' }} su
                         <span class="num">{{ table.rows.length }}</span
@@ -125,7 +125,7 @@ function percentileTable(stats: RaceModelStats | null | undefined) {
               <p class="help">{{ boundText(stats) }}</p>
               @if (stats.p_value != null) {
                 <p class="help">
-                  p: probabilità di una violazione almeno così grande quando il modello a gara vale, stimata con
+                  p: probabilità di una violazione almeno così grande quando il Race Model vale, stimata con
                   2000 ricampionamenti. La violazione conta se p &lt; 0,05.
                 </p>
               }
@@ -161,7 +161,7 @@ export class RaceModelSectionComponent {
     if (stats.method === 'rate_threshold_crossing') {
       return 'Limite di Miller, min(1, F_V + F_A), con le distribuzioni calcolate sui soli trial con risposta.';
     }
-    return 'Limite del modello a gara indipendente, F_V + F_A − F_V·F_A, sui soli trial con risposta.';
+    return 'Limite del Race Model indipendente, F_V + F_A − F_V·F_A, sui soli trial con risposta.';
   }
 
   readonly graphs = input.required<RaceModelGraph[]>();

@@ -15,7 +15,7 @@ MAX_CAMPAIGN_SIMULATIONS = 50
 MAX_SWEEP_VALUES = 20
 SWEEP_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,3}$")
 
-# Ordine in cui il riepilogo elenca le condizioni; "race" è il modello a gara a coppie.
+# Ordine in cui il riepilogo elenca le condizioni; "race" è il Race Model a coppie.
 CONDITIONS = ("A", "V", "AV", "race")
 
 

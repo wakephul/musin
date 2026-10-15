@@ -8,7 +8,7 @@ export const CONDITION_LABELS: Record<string, string> = {
   A: 'Uditivo',
   V: 'Visivo',
   AV: 'Audiovisivo',
-  race: 'Modello a gara',
+  race: 'Race Model',
 };
 
 type Counts = Record<SimulationStatus, number>;

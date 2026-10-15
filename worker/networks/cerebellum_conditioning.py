@@ -558,7 +558,7 @@ def run_cerebellum_conditioning(sim_id_dict, exp_params, storage, progress_cb):
                             'Uditivo': (responses['auditory'], '--s', '#1c1c1a', '#1c1c1a'),
                             'Visivo': (responses['visual'], '--o', '#1c1c1a', '#1c1c1a'),
                             'Audiovisivo': (responses['audiovisual'], '-D', '#0f6e6e', '#ffffff'),
-                            'Modello a gara': (race, '-o', '#9a9a92', '#ffffff'),
+                            'Race Model': (race, '-o', '#9a9a92', '#ffffff'),
                         })
     if rmi is not None:
         plot_race_model(store, 'rmi_DCN.png', rmi,

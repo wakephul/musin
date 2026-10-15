@@ -15,7 +15,7 @@ del modello `decision_making_nrp.py`.
 
 Modalità `dual` (modello acerebellare di Cavadini et al. 2025): due reti indipendenti,
 una uditiva e una visiva, ricevono gli stessi trial; la risposta audiovisiva è quella
-della rete più veloce (modello a gara). Mandare le due modalità sulla stessa rete
+della rete più veloce (Race Model). Mandare le due modalità sulla stessa rete
 (`audiovisual`) la satura, per questo il paper usa due reti.
 
 Ogni trial ha una realizzazione di Poisson indipendente (il codice originale
@@ -390,7 +390,7 @@ def run_decision_making_experiment(sim_info, exp_params, storage, progress_cb):
     if modality == "dual":
         # Modello acerebellare: non c'è integrazione, risponde la rete più veloce.
         race = paired_race(results["auditory"]["response_times"], results["visual"]["response_times"])
-        curves["Audiovisivo = modello a gara"] = (race, "-o", "#9a9a92", "#ffffff")
+        curves["Audiovisivo = Race Model"] = (race, "-o", "#9a9a92", "#ffffff")
         rmi = race_model_inequality(answered["visual"], answered["auditory"], race, num_trials, num_trials, num_trials, step_ms=bin_ms)
         store.put_json("race_model.json", {"race_model": [{
             "population": "Reti uditiva e visiva",

@@ -182,7 +182,7 @@ def median_difference_ci(groups, reference, n_bootstrap: int = 2000, seed: int =
 
 
 def paired_race(rt_first, rt_second) -> list:
-    """Modello a gara del paper: per ogni coppia di trial risponde il canale più veloce.
+    """Race Model del paper: per ogni coppia di trial risponde il canale più veloce.
     `None` è un trial senza risposta; la coppia manca solo se mancano entrambi."""
     race = []
     for first, second in zip(rt_first, rt_second):
