@@ -170,33 +170,35 @@ produce about 200 MB of spikes per simulation.
 
 ### How close this is to the paper
 
-Median response times in ms, three seeds pooled; in brackets the 95 % bootstrap
-interval. Parameters are the defaults except the number of trials: 45 test trials per
-condition for the cerebellar network, 40 trials for the cortical ones. The paper
-column is the response times behind Fig. 9, read from the notebooks of the original
-analysis.
+Two campaigns of three seeds each, with the default parameters apart from the number of
+trials: 45 test trials per condition for the cerebellar network, 40 trials for the
+cortical ones. Median response
+times in ms with the 95 % interval of the campaign page; the difference is MuSiN minus
+the paper, again with its interval. The paper column is the response times behind
+Fig. 9, read from the notebooks of the original analysis.
 
-| Cerebellar network (135 trials per condition) | Here            | Paper (541) |
-| --------------------------------------------- | --------------- | ----------- |
-| Auditory                                      | 328 (305 – 372) | 320         |
-| Visual                                        | 390 (355 – 415) | 370         |
-| Audiovisual                                   | 245 (240 – 245) | 245         |
-| Race model                                    | 322 (308 – 340) | 305         |
+| Cerebellar network (135 trials) | Here              | Paper (541) | Difference           |
+| ------------------------------- | ----------------- | ----------- | -------------------- |
+| Auditory                        | 328 (290 – 385)   | 320         | +8 (−28 … +73)       |
+| Visual                          | 390 (335 – 435)   | 370         | +20 (−35 … +65)      |
+| Audiovisual                     | 245 (240 – 245)   | 245         | 0 (−5 … 0)           |
+| Race model                      | 323 (295 – 360)   | 305         | +18 (−10 … +55)      |
 
 Audiovisual responses are faster than the race model at 10 of the 10 percentiles (8 of
-10 in the paper data) and the inequality is violated in every run (p < 0.001).
+10 in the paper data) and the inequality is violated (p < 0.001).
 
-| Two cortical networks (120 trials) | Here            | Paper (40) |
-| ---------------------------------- | --------------- | ---------- |
-| Auditory                           | 240 (218 – 260) | 290        |
-| Visual                             | 320 (310 – 342) | 335        |
-| Audiovisual = race                 | 230 (218 – 255) | 275        |
+| Two cortical networks (120 trials) | Here              | Paper (40) | Difference          |
+| ---------------------------------- | ----------------- | ---------- | ------------------- |
+| Auditory                           | 260 (220 – 283)   | 290        | −30 (−70 … 0)       |
+| Visual                             | 325 (298 – 345)   | 335        | −10 (−48 … +13)     |
+| Audiovisual = race                 | 250 (220 – 275)   | 275        | −25 (−60 … −5)      |
 
-The cortical auditory network answers earlier here than in the paper's single set of
-40 trials. Its median depends on the noise draw: 228 to 265 ms across the three seeds,
-and about 20 ms more in a fourth run with a lower background rate (0.9 instead of
-4.4 Hz). The paper's 290 ms sits at the upper edge of that range. The qualitative
-result holds in every run: no violation without the cerebellum, a violation with it.
+The cerebellar network matches the paper within the uncertainty. The cortical networks
+answer 10 to 30 ms earlier; only the race between them is outside the interval, by
+5 ms. Each cortical simulation draws its own background noise level, as in the
+original model, and the median moves by about 20 ms from one seed to the next. The
+qualitative result holds in every run: no violation without the cerebellum, a violation
+with it.
 
 ## Architecture
 
